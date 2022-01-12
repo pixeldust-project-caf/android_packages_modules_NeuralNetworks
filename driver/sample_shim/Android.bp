@@ -61,7 +61,7 @@ cc_defaults {
     static_libs: [
         "android.hardware.common-V2-ndk_platform",
         "android.hardware.graphics.common-V2-ndk_platform",
-        "android.hardware.neuralnetworks-V2-ndk_platform",
+        "android.hardware.neuralnetworks-V3-ndk_platform",
         "libaidlcommonsupport",
         "libarect",
         "libcutils",
