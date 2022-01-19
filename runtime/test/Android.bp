@@ -392,7 +392,6 @@ cc_library_static {
         "fuzzing/RandomVariable.cpp",
         "fuzzing/TestRandomGraph.cpp",
         "fuzzing/operation_signatures/*.cpp",
-        "generated/spec_AIDL_V*/*.example.cpp",
         "generated/spec_V1_*/*.example.cpp",
     ],
     include_dirs: [
