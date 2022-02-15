@@ -19,6 +19,7 @@
 #include "ServerFlag.h"
 
 #include <android-base/logging.h>
+#include <android-base/parsebool.h>
 #include <android-base/parseint.h>
 #include <nnapi/Types.h>
 #include <stdint.h>
@@ -31,11 +32,21 @@
 
 namespace android::nn {
 
-#if !defined(NN_COMPATIBILITY_LIBRARY_BUILD) && !defined(NN_EXPERIMENTAL_FEATURE)
+#ifndef NN_COMPATIBILITY_LIBRARY_BUILD
+#ifndef NN_EXPERIMENTAL_FEATURE
 int64_t getServerFeatureLevelFlag() {
-    const std::string featureLevelString = server_configurable_flags::GetServerConfigurableFlag(
-            kExprCategoryName, kCurrentFeatureLevelFlagName,
-            std::to_string(kDefaultFeatureLevelNum));
+    return getServerFeatureLevelFlag(server_configurable_flags::GetServerConfigurableFlag);
+}
+
+bool getServerTelemetryEnableFlag() {
+    return getServerTelemetryEnableFlag(server_configurable_flags::GetServerConfigurableFlag);
+}
+#endif  // NN_EXPERIMENTAL_FEATURE
+
+int64_t getServerFeatureLevelFlag(GetServerConfigurableFlagFunc serverFunc) {
+    const std::string featureLevelString =
+            serverFunc(kExprCategoryName, kCurrentFeatureLevelFlagName,
+                       std::to_string(kDefaultFeatureLevelNum));
 
     int64_t featureLevel = kDefaultFeatureLevelNum;
     const bool success = base::ParseInt(featureLevelString, &featureLevel, kMinFeatureLevelNum,
@@ -45,7 +56,28 @@ int64_t getServerFeatureLevelFlag() {
     }
     return featureLevel;
 }
-#endif  // !defined(NN_COMPATIBILITY_LIBRARY_BUILD) && !defined(NN_EXPERIMENTAL_FEATURE)
+
+bool getServerTelemetryEnableFlag(GetServerConfigurableFlagFunc serverFunc) {
+    const std::string telemetryEnabledString =
+            serverFunc(kExprCategoryName, kTelemetryEnableFlagName,
+                       std::to_string(kDefaultTelemetryEnableValue));
+
+    const auto parseBoolResult = base::ParseBool(telemetryEnabledString);
+    switch (parseBoolResult) {
+        case base::ParseBoolResult::kError:
+            LOG(WARNING) << "Failed to parse result of GetServerConfigurableFlag";
+            return kDefaultTelemetryEnableValue;
+        case base::ParseBoolResult::kFalse:
+            return false;
+        case base::ParseBoolResult::kTrue:
+            return true;
+    }
+    LOG(WARNING) << "Unrecognized return from base::ParseBool: "
+                 << static_cast<int32_t>(parseBoolResult);
+    return kDefaultTelemetryEnableValue;
+}
+
+#endif  // NN_COMPATIBILITY_LIBRARY_BUILD
 
 Version serverFeatureLevelToVersion(int64_t serverFeatureLevel) {
     Version version;

@@ -23,8 +23,6 @@
 #include <android-base/scopeguard.h>
 #include <android/binder_auto_utils.h>
 #include <android/binder_interface_utils.h>
-#include <android/binder_manager.h>
-#include <android/binder_process.h>
 #include <nnapi/Result.h>
 #include <nnapi/Types.h>
 #include <nnapi/Validation.h>
@@ -117,6 +115,18 @@ ndk::ScopedAStatus SampleDriver::prepareModel(
     }
     return prepareModelBase(std::move(copiedModel).value(), this, preference, priority, deadlineNs,
                             callback);
+}
+ndk::ScopedAStatus SampleDriver::prepareModelWithConfig(
+        const aidl_hal::Model& model, const aidl_hal::PrepareModelConfig& config,
+        const std::shared_ptr<aidl_hal::IPreparedModelCallback>& callback) {
+    NNTRACE_FULL(NNTRACE_LAYER_DRIVER, NNTRACE_PHASE_COMPILATION,
+                 "SampleDriver::prepareModelWithConfig");
+    auto copiedModel = aidl_hal::utils::clone(model);
+    if (!copiedModel.has_value()) {
+        return toAStatus(aidl_hal::ErrorStatus::GENERAL_FAILURE, copiedModel.error().message);
+    }
+    return prepareModelBase(std::move(copiedModel).value(), this, config.preference,
+                            config.priority, config.deadlineNs, callback);
 }
 
 ndk::ScopedAStatus SampleDriver::prepareModelFromCache(
@@ -219,17 +229,6 @@ ndk::ScopedAStatus SampleDriver::allocate(
     buffer->buffer = std::move(sampleBuffer);
     buffer->token = tokenValue;
     return ndk::ScopedAStatus::ok();
-}
-
-int SampleDriver::run() {
-    ABinderProcess_setThreadPoolMaxThreadCount(4);
-    const std::string name = std::string(SampleDriver::descriptor) + "/" + mName;
-    const binder_status_t status = AServiceManager_addService(this->asBinder().get(), name.c_str());
-    if (status != STATUS_OK) {
-        return 1;
-    }
-    ABinderProcess_joinThreadPool();
-    return 1;
 }
 
 static void copyRunTimePoolInfos(const RunTimePoolInfo& srcPool, const RunTimePoolInfo& dstPool) {
@@ -602,6 +601,20 @@ ndk::ScopedAStatus SamplePreparedModel::executeFenced(
     return ndk::ScopedAStatus::ok();
 }
 
+ndk::ScopedAStatus SamplePreparedModel::executeSynchronouslyWithConfig(
+        const aidl_hal::Request& request, const aidl_hal::ExecutionConfig& config,
+        int64_t deadlineNs, aidl_hal::ExecutionResult* executionResult) {
+    return executeSynchronously(request, config.measureTiming, deadlineNs,
+                                config.loopTimeoutDurationNs, executionResult);
+}
+ndk::ScopedAStatus SamplePreparedModel::executeFencedWithConfig(
+        const aidl_hal::Request& request, const std::vector<ndk::ScopedFileDescriptor>& waitFor,
+        const aidl_hal::ExecutionConfig& config, int64_t deadlineNs, int64_t durationNs,
+        aidl_hal::FencedExecutionResult* executionResult) {
+    return executeFenced(request, waitFor, config.measureTiming, deadlineNs,
+                         config.loopTimeoutDurationNs, durationNs, executionResult);
+}
+
 ndk::ScopedAStatus SamplePreparedModel::configureExecutionBurst(
         std::shared_ptr<aidl_hal::IBurst>* burst) {
     std::shared_ptr<SamplePreparedModel> self = this->template ref<SamplePreparedModel>();
@@ -639,11 +652,75 @@ ndk::ScopedAStatus SampleBurst::executeSynchronously(
                                                 loopTimeoutDurationNs, executionResult);
 }
 
+ndk::ScopedAStatus SampleBurst::executeSynchronouslyWithConfig(
+        const aidl_hal::Request& request, const std::vector<int64_t>& memoryIdentifierTokens,
+        const aidl_hal::ExecutionConfig& config, int64_t deadlineNs,
+        aidl_hal::ExecutionResult* executionResult) {
+    return executeSynchronously(request, memoryIdentifierTokens, config.measureTiming, deadlineNs,
+                                config.loopTimeoutDurationNs, executionResult);
+}
+
 ndk::ScopedAStatus SampleBurst::releaseMemoryResource(int64_t memoryIdentifierToken) {
     if (memoryIdentifierToken < -1) {
         return toAStatus(aidl_hal::ErrorStatus::INVALID_ARGUMENT, "Invalid memoryIdentifierToken");
     }
     return ndk::ScopedAStatus::ok();
+}
+
+ndk::ScopedAStatus SamplePreparedModel::createReusableExecution(
+        const aidl_hal::Request& halRequest, const aidl_hal::ExecutionConfig& config,
+        std::shared_ptr<aidl_hal::IExecution>* execution) {
+    NNTRACE_FULL(NNTRACE_LAYER_DRIVER, NNTRACE_PHASE_EXECUTION,
+                 "SamplePreparedModel::createReusableExecution");
+    VLOG(DRIVER) << "SamplePreparedModel::createReusableExecution";
+
+    auto maybeClonedRequest = aidl_hal::utils::clone(halRequest);
+    if (!maybeClonedRequest.ok()) {
+        return toAStatus(aidl_hal::ErrorStatus::GENERAL_FAILURE,
+                         maybeClonedRequest.error().message);
+    }
+
+    std::shared_ptr<SamplePreparedModel> self = this->template ref<SamplePreparedModel>();
+    *execution = ndk::SharedRefBase::make<SampleExecution>(
+            std::move(self), std::move(maybeClonedRequest).value(), config.measureTiming,
+            config.loopTimeoutDurationNs);
+    return ndk::ScopedAStatus::ok();
+}
+
+ndk::ScopedAStatus SampleExecution::executeSynchronously(
+        int64_t halDeadlineNs, aidl_hal::ExecutionResult* executionResult) {
+    NNTRACE_FULL(NNTRACE_LAYER_DRIVER, NNTRACE_PHASE_EXECUTION,
+                 "SampleExecution::executeSynchronously");
+    VLOG(DRIVER) << "SampleExecution::executeSynchronously";
+
+    // Ensure at most one computation is in flight at a time.
+    const bool computationAlreadyInFlight = mComputationInFlight.test_and_set();
+    if (computationAlreadyInFlight) {
+        return toAStatus(aidl_hal::ErrorStatus::GENERAL_FAILURE,
+                         "Execution object supports at most one computation at a time");
+    }
+    const auto guard = base::make_scope_guard([this] { mComputationInFlight.clear(); });
+
+    return kPreparedModel->executeSynchronously(kHalRequest, kMeasureTiming, halDeadlineNs,
+                                                kLoopTimeoutDurationNs, executionResult);
+}
+
+ndk::ScopedAStatus SampleExecution::executeFenced(
+        const std::vector<ndk::ScopedFileDescriptor>& waitFor, int64_t deadlineNs,
+        int64_t durationNs, aidl_hal::FencedExecutionResult* executionResult) {
+    NNTRACE_FULL(NNTRACE_LAYER_DRIVER, NNTRACE_PHASE_EXECUTION, "SampleExecution::executeFenced");
+    VLOG(DRIVER) << "SampleExecution::executeFenced";
+
+    // Ensure at most one computation is in flight at a time.
+    const bool computationAlreadyInFlight = mComputationInFlight.test_and_set();
+    if (computationAlreadyInFlight) {
+        return toAStatus(aidl_hal::ErrorStatus::GENERAL_FAILURE,
+                         "Execution object supports at most one computation at a time");
+    }
+    const auto guard = base::make_scope_guard([this] { mComputationInFlight.clear(); });
+
+    return kPreparedModel->executeFenced(kHalRequest, waitFor, kMeasureTiming, deadlineNs,
+                                         kLoopTimeoutDurationNs, durationNs, executionResult);
 }
 
 }  // namespace sample_driver_aidl

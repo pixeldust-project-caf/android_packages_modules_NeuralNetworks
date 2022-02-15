@@ -6676,6 +6676,18 @@
     /**
      * Pads a tensor with mirrored values.
      *
+     * This operator specifies one of two padding modes: REFLECT or SYMMETRIC.
+     * In the case of REFLECT mode, the mirroring excludes the border element
+     * on the padding side.
+     * In the case of SYMMETRIC mode, the mirroring includes the border element
+     * on the padding side.
+     *
+     * For example, if the input is the 1-D tensor `[1, 2, 3]` and the padding
+     * is `[0, 2]` (i.e., pad no elements before the first (and only) dimension,
+     * and two elements after the first (and only) dimension), then:
+     *     - REFLECT mode produces the output `[1, 2, 3, 2, 1]`
+     *     - SYMMETRIC mode produces the output `[1, 2, 3, 3, 2]`
+     *
      * Supported tensor {@link %{OperandType}}:
      * * {@link %{OperandTypeLinkPfx}TENSOR_FLOAT16}
      * * {@link %{OperandTypeLinkPfx}TENSOR_FLOAT32}
@@ -6694,6 +6706,11 @@
      *      front of dimension i.
      *      padding[i, 1] specifies the number of elements to be padded after the
      *      end of dimension i.
+     *      Each padding value must be nonnegative.
+     *      In the case of REFLECT mode, each padding value must be less than the
+     *      corresponding dimension.
+     *      In the case of SYMMETRIC mode, each padding value must be less than or
+     *      equal to the corresponding dimension.
      * * 2: An {@link %{OperandTypeLinkPfx}INT32} scalar, specifying the mode.
      *      Options are 0:REFLECT and 1:SYMMETRIC.
      *
@@ -7586,6 +7603,57 @@ struct Operand {
 %define SharedMemory memory
 %/kind
 
+%section ExtensionNameAndPrefix
+%kind canonical
+/**
+ * The mapping between extension names and prefixes of values like operand and operation type, and
+ * token in {@link TokenValuePair}.
+ *
+ * An operand or operation whose numeric type value is above {@link IDevice::OPERAND_TYPE_BASE_MAX}
+ * or {@link IDevice::OPERATION_TYPE_BASE_MAX} respectively should be interpreted as an extension
+ * operand/operation. The low kExtensionTypeBits bits of the value correspond to the type ID within
+ * the extension and the high kExtensionPrefixBits bits encode the "prefix", which maps uniquely to
+ * the extension name. The sign bit is always 0.
+ *
+ * For example, if a model contains an operation whose value is 0x7AAABBBB and
+ * Model::extensionNameToPrefix contains an entry with prefix=0x7AAA and
+ * name="vendor.test.test_extension", then the operation should be interpreted as the operation
+ * 0xBBBB of the extension named vendor.test.test_extension.
+ *
+ * This is a one-to-one correspondence. That is, there must be at most one prefix corresponding to
+ * each extension name and at most one extension name corresponding to each prefix.
+ */
+%/kind
+%kind hal_1.2 hal_1.3
+/**
+ * A correspondence between an extension name and a prefix of operand and
+ * operation type values.
+ */
+%/kind
+struct ExtensionNameAndPrefix {
+    /**
+     * The extension name.
+     *
+     * See {@link Extension::name} for the format specification.
+     */
+    %{string} name;
+
+%kind canonical
+    /**
+     * The extension prefix. Only the lowest 15 bits are used, so the value must be less than 32768.
+     */
+%/kind
+%kind hal_1.2 hal_1.3
+    /**
+     * The unique extension identifier within the model.
+     *
+     * See {@link Model::extensionNameToPrefix}.
+     */
+%/kind
+    uint16_t prefix%{init_int};
+};
+%/section
+
 %section Model_1.0
     /**
      * A byte buffer containing operand data that were copied into the model.
@@ -7718,28 +7786,6 @@ struct Subgraph {
 };
 %/section
 
-%section ExtensionNameAndPrefix
-/**
- * A correspondence between an extension name and a prefix of operand and
- * operation type values.
- */
-struct ExtensionNameAndPrefix {
-    /**
-     * The extension name.
-     *
-     * See {@link Extension::name} for the format specification.
-     */
-    %{string} name;
-
-    /**
-     * The unique extension identifier within the model.
-     *
-     * See {@link Model::extensionNameToPrefix}.
-     */
-    uint16_t prefix%{init_int};
-};
-%/section
-
 %section ExtensionTypeEncoding
 /**
  * Numeric values of extension operand and operation types have the
@@ -7793,8 +7839,6 @@ struct Model {
        private:
         std::vector<uint8_t> mData;
     };
-
-%insert-indented 4 ExtensionNameAndPrefix
 
 %insert Model_1.3_main_and_referenced_subgraphs
 

@@ -16,11 +16,7 @@
 
 package {
     // See: http://go/android-license-faq
-    // A large-scale-change added 'default_applicable_licenses' to import
-    // all of the 'license_kinds' from "packages_modules_NeuralNetworks_runtime_license"
-    // to get the below license kinds:
-    //   SPDX-license-identifier-Apache-2.0
-    //   SPDX-license-identifier-Artistic
+    // Inherits all licenses from parent to get Apache 2.0 and package name.
     default_applicable_licenses: [
         "packages_modules_NeuralNetworks_runtime_license",
     ],
@@ -68,6 +64,7 @@ cc_defaults {
             shared_libs: [
                 "libandroid",
                 "libnativewindow",
+                "libstatssocket",
             ],
         },
         host: {
@@ -181,6 +178,7 @@ cc_defaults {
         "TestPartitioning.cpp",
         "TestPartitioningRandom.cpp",
         "TestRemoveDefaultArguments.cpp",
+        "TestServerFlag.cpp",
         "TestTelemetry.cpp",
         "fibonacci_extension/FibonacciDriver.cpp",
         "fibonacci_extension/FibonacciExtensionTest.cpp",
@@ -212,6 +210,7 @@ cc_test {
     target: {
         android: {
             test_config: "AndroidTest_NeuralNetworksTest_static.xml",
+            srcs: ["TestWestworldTelemetry.cpp"],
         },
         host: {
             cflags: [
@@ -688,11 +687,12 @@ cc_test {
         "neuralnetworks_supportlibrary_loader",
     ],
     whole_static_libs: [
+        "neuralnetworks_generated_AIDL_V2_example",
+        "neuralnetworks_generated_AIDL_V3_example",
         "neuralnetworks_generated_V1_0_example",
         "neuralnetworks_generated_V1_1_example",
         "neuralnetworks_generated_V1_2_example",
-        "neuralnetworks_generated_V1_3_cts_only_example",
-        "neuralnetworks_generated_V1_3_example",
+        "neuralnetworks_generated_V1_3_example", // TODO (b/209655430): Decide if need to add "neuralnetworks_generated_V1_3_cts_only_example".
     ],
     include_dirs: [
         "packages/modules/NeuralNetworks/runtime/include/",

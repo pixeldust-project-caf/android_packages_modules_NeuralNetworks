@@ -17,11 +17,13 @@
 #ifndef ANDROID_PACKAGES_MODULES_NEURALNETWORKS_COMMON_OPERATIONS_CAST_H
 #define ANDROID_PACKAGES_MODULES_NEURALNETWORKS_COMMON_OPERATIONS_CAST_H
 
-#include "CpuOperationUtils.h"
+#include "OperationsUtils.h"
 
 namespace android {
 namespace nn {
 namespace cast {
+
+Result<Version> validate(const IOperationValidationContext* context);
 
 bool prepare(const Shape& input, Shape* output);
 

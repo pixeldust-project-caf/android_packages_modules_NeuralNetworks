@@ -123,7 +123,7 @@ EntryType tableLookup(const EntryType (&table)[entryCount],
     } else if (code >= kOEMCodeBase && (code - kOEMCodeBase) < entryCountOEM) {
         return tableOEM[code - kOEMCodeBase];
     } else {
-        nnAssert(!"tableLookup: bad code");
+        LOG(FATAL) << "tableLookup: bad code";
         return EntryType();
     }
 }
@@ -756,7 +756,7 @@ int validateOperation(ANeuralNetworksOperationType opType, uint32_t inputCount,
                                    OperandType::TENSOR_INT32};
                 outExpectedTypes = {OperandType::TENSOR_QUANT8_ASYMM_SIGNED};
             } else if (inputType == OperandType::TENSOR_INT32) {
-                // TODO(b/202585778): Add validateHalVersion against AIDL_V2.
+                NN_RETURN_IF_ERROR(validateHalVersion(opType, halVersion, HalVersion::AIDL_V2));
                 inExpectedTypes = {OperandType::TENSOR_INT32, OperandType::TENSOR_INT32};
                 outExpectedTypes = {OperandType::TENSOR_INT32};
             } else {

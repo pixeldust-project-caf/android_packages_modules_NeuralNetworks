@@ -131,6 +131,7 @@ class ModelBuilder {
     // simulateFailureResultCode == ANEURALNETWORKS_NO_ERROR means behave normally.
     int partitionTheWork(const std::vector<std::shared_ptr<Device>>& devices, uint32_t preference,
                          uint32_t priority, const OptionalTimePoint& deadline, ExecutionPlan* plan,
+                         const std::vector<TokenValuePair>& metaData,
                          int simulateFailureResultCode = ANEURALNETWORKS_NO_ERROR) const;
 
     const uint8_t* getModelArchHash() const;
@@ -185,6 +186,11 @@ class ModelBuilder {
     // Copies the large values to a shared memory, if we have any.
     int copyLargeValuesToSharedMemory();
 
+    // Mark that the model should be simplified during ModelBuilder::makeModel, removing arguments
+    // from operations that already match the default values, dead operands, dead pools, dead
+    // subgraphs, and dead extensions.
+    void simplifyModel();
+
     // The operations of the graph.
     std::vector<Operation> mOperations;
     // The mapping from sorted index to the original index of operations in mOperations.
@@ -202,6 +208,10 @@ class ModelBuilder {
     std::vector<uint32_t> mInputIndexes;
     // The indexes of output operands of the model.
     std::vector<uint32_t> mOutputIndexes;
+    // Whether the model should be simplified during ModelBuilder::makeModel, removing arguments
+    // from operations that already match the default values, dead operands, dead pools, dead
+    // subgraphs, and dead extensions.
+    bool mSimplifyModel = false;
 
     MemoryTracker mMemories;
 

@@ -17,20 +17,24 @@
 #ifndef ANDROID_PACKAGES_MODULES_NEURALNETWORKS_COMMON_OPERATIONS_LSTM_H
 #define ANDROID_PACKAGES_MODULES_NEURALNETWORKS_COMMON_OPERATIONS_LSTM_H
 
-#include <tensorflow/lite/kernels/internal/tensor_utils.h>
-
 #include <algorithm>
 #include <cmath>
 #include <vector>
 
 #include "ActivationFunctor.h"
+#include "OperationsUtils.h"
 #include "nnapi/Types.h"
 
 namespace android {
 namespace nn {
+namespace lstm {
+
+Result<Version> validate(const IOperationValidationContext* context);
+
+}  // namespace lstm
 
 struct LSTMParams {
-    TfLiteFusedActivation activation;
+    ActivationFn activation;
     float cell_clip;
     float proj_clip;
     bool use_cifg;

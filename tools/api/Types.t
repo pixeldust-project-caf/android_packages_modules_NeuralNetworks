@@ -195,6 +195,8 @@ struct Memory {
     std::variant<Ashmem, Fd, HardwareBuffer, Unknown> handle;
 };
 
+%insert ExtensionNameAndPrefix
+
 %insert Model
 
 %insert BufferDesc
@@ -258,6 +260,7 @@ struct Version {
         FEATURE_LEVEL_5,
         FEATURE_LEVEL_6,
         FEATURE_LEVEL_7,
+        FEATURE_LEVEL_8,
 #ifdef NN_EXPERIMENTAL_FEATURE
         FEATURE_LEVEL_EXPERIMENTAL,
 #endif  // NN_EXPERIMENTAL_FEATURE
@@ -274,6 +277,7 @@ constexpr auto kVersionFeatureLevel4 = Version{.level = Version::Level::FEATURE_
 constexpr auto kVersionFeatureLevel5 = Version{.level = Version::Level::FEATURE_LEVEL_5};
 constexpr auto kVersionFeatureLevel6 = Version{.level = Version::Level::FEATURE_LEVEL_6};
 constexpr auto kVersionFeatureLevel7 = Version{.level = Version::Level::FEATURE_LEVEL_7};
+constexpr auto kVersionFeatureLevel8 = Version{.level = Version::Level::FEATURE_LEVEL_8};
 #ifdef NN_EXPERIMENTAL_FEATURE
 constexpr auto kVersionFeatureLevelExperimental =
         Version{.level = Version::Level::FEATURE_LEVEL_EXPERIMENTAL};
@@ -292,6 +296,28 @@ struct MemoryPreference {
     // by the number of elements) rounding up to a multiple of the "padding" value. In DataLocation,
     // the padded length equals to the sum of the length and padding fields.
     uint32_t padding;
+};
+
+/**
+ * A type that is used to represent a token / byte array data pair.
+ */
+struct TokenValuePair {
+    /**
+     * A 32bit integer token. The token is created by combining the
+     * extension prefix and enum defined within the extension. Of the 32 bits in the token, the high
+     * kExtensionPrefixBits bits is the extension prefix and the low kExtensionTypeBits bits
+     * represents the enum within the extension.
+     *
+     * For example, if a token value is 0x7AAA000B and corresponding {@link ExtensionNameAndPrefix}
+     * contains an entry with prefix=0x7AAA and name="vendor.test.test_extension", then the token
+     * should be interpreted as the enum value 0x000B of the extension named
+     * vendor.test.test_extension.
+     */
+    int32_t token;
+    /**
+     * A byte array containing the raw data.
+     */
+    std::vector<uint8_t> value;
 };
 
 }  // namespace android::nn
