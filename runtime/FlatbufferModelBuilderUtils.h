@@ -31,6 +31,7 @@ using OpCodesFlatbuffer = flatbuffers::Offset<flatbuffers::Vector<OpCodeFlatbuff
 using SubGraphFlatbuffer = flatbuffers::Offset<tflite::SubGraph>;
 using SubGraphsFlatbuffer = flatbuffers::Offset<flatbuffers::Vector<SubGraphFlatbuffer>>;
 
+using OperatorCodeFlatbuffer = flatbuffers::Offset<tflite::OperatorCode>;
 using OperatorFlatbuffer = flatbuffers::Offset<tflite::Operator>;
 using OperatorsFlatbuffer = flatbuffers::Offset<flatbuffers::Vector<OperatorFlatbuffer>>;
 
@@ -71,6 +72,20 @@ inline tflite::BuiltinOperator getFlatbufferOperator(const OperationType& type) 
             return tflite::BuiltinOperator::BuiltinOperator_CONV_2D;
         default:
             LOG(FATAL) << "OperationType not supported: " << type;
+            return {};
+    }
+}
+
+// Referenced from external/tensorflow/tensorflow/lite/tools/versioning/op_version.cc
+inline int32_t getMaxOperatorVersionCode(tflite::BuiltinOperator builtinCode) {
+    // TODO: Add more builtin_codes
+    switch (builtinCode) {
+        case tflite::BuiltinOperator::BuiltinOperator_CONV_2D:
+            return 5;
+        case tflite::BuiltinOperator::BuiltinOperator_PAD:
+            return 4;
+        default:
+            LOG(FATAL) << "BuiltinOperator not supported: " << builtinCode;
             return {};
     }
 }
