@@ -19,6 +19,9 @@
 
 #include <tensorflow/lite/schema/schema_generated.h>
 
+#include <algorithm>
+#include <vector>
+
 #include "NeuralNetworks.h"
 #include "TypeManager.h"
 
@@ -88,6 +91,37 @@ inline int32_t getMaxOperatorVersionCode(tflite::BuiltinOperator builtinCode) {
             LOG(FATAL) << "BuiltinOperator not supported: " << builtinCode;
             return {};
     }
+}
+
+inline bool operandHasUnspecifiedRank(const Operand& operand) {
+    return operand.dimensions.empty();
+}
+
+inline bool checkAllOperandsHaveSpecifiedRank(const std::vector<Operand>& operands) {
+    return std::none_of(operands.begin(), operands.end(), &operandHasUnspecifiedRank);
+}
+
+inline bool isOperandConstant(const Operand& operand) {
+    return operand.lifetime == Operand::LifeTime::CONSTANT_COPY ||
+           operand.lifetime == Operand::LifeTime::CONSTANT_REFERENCE;
+}
+
+inline tflite::Padding getTFLitePadding(int32_t paddingType) {
+    switch (paddingType) {
+        case ANEURALNETWORKS_PADDING_VALID:  // VALID
+        case 0:
+            return tflite::Padding::Padding_VALID;
+        case ANEURALNETWORKS_PADDING_SAME:  // SAME
+            return tflite::Padding::Padding_SAME;
+        default:
+            LOG(FATAL) << "Unsupported NNAPI NDK padding type: " << paddingType;
+            return {};
+    }
+}
+
+// Replace all 0 dimensions to -1 since TFLite only supports -1 as an unknown dimension
+inline void replaceZeroDimensions(std::vector<int32_t>* dims) {
+    std::replace(dims->begin(), dims->end(), 0, -1);
 }
 
 }  // namespace nn

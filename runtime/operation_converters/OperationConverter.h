@@ -27,7 +27,7 @@ class IOperationConverter {
     virtual ~IOperationConverter() = default;
 
     // Returns true if convert is successful
-    virtual bool convert(SubGraphContext* context) const = 0;
+    virtual bool convert(const Operation& operation, SubGraphContext* context) const = 0;
 };
 
 }  // namespace nn

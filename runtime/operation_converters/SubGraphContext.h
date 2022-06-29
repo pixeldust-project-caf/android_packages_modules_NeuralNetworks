@@ -53,13 +53,15 @@ class SubGraphContext {
     // Returns -1 if there is no corresponding tensor index
     int getTensorIdxFromOperandIdx(int operandIdx) const;
     uint32_t getOpCodeIndex(OperationType operationType) const;
-    flatbuffers::FlatBufferBuilder* getBuilder() { return mBuilder; }
+    flatbuffers::FlatBufferBuilder& getBuilder() { return *mBuilder; }
 
     // OperandLifeTime must be CONSTANT_COPY or CONSTANT_REFERENCE
     // Will crash if OperandLifeTime is not either of the two.
-    // dataSize is the size of value in bytes.
+    // dataSize is the size of data in bytes.
     template <typename Type>
     void copyConstantValueToData(const Operand& operand, Type* data, size_t dataSize);
+    template <typename Type>
+    Type getConstantScalar(const Operand& operand);
 
     // Returns Buffer index
     uint32_t addBufferFromData(const uint8_t* data, uint32_t length);
@@ -92,6 +94,13 @@ void SubGraphContext::copyConstantValueToData(const Operand& operand, Type* data
     CHECK_GE(dataSize, length);
 
     std::memcpy(data, pointer, length);
+}
+
+template <typename Type>
+Type SubGraphContext::getConstantScalar(const Operand& operand) {
+    Type data;
+    copyConstantValueToData(operand, &data, sizeof(Type));
+    return data;
 }
 
 }  // namespace nn

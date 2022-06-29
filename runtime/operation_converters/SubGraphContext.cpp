@@ -123,8 +123,7 @@ const Mapping& SubGraphContext::getMapping(uint32_t poolIndex) {
 
 std::pair<const uint8_t*, uint32_t> SubGraphContext::getConstantPointerAndLength(
         const Operand& operand) {
-    CHECK(operand.lifetime == Operand::LifeTime::CONSTANT_COPY ||
-          operand.lifetime == Operand::LifeTime::CONSTANT_REFERENCE);
+    CHECK(isOperandConstant(operand));
 
     if (operand.lifetime == Operand::LifeTime::CONSTANT_COPY) {
         return std::make_pair(mModel->operandValues.data() + operand.location.offset,
@@ -155,9 +154,6 @@ void SubGraphContext::createTensorFlatbufferFromOperand(uint32_t operandIdx) {
 
     const Operand& operand = mSubgraph->operands[operandIdx];
 
-    bool isConstant = operand.lifetime == Operand::LifeTime::CONSTANT_COPY ||
-                      operand.lifetime == Operand::LifeTime::CONSTANT_REFERENCE;
-
     std::vector<float> scaleVector{operand.scale};
     std::vector<int64_t> zeroPointVector{operand.zeroPoint};
 
@@ -170,14 +166,14 @@ void SubGraphContext::createTensorFlatbufferFromOperand(uint32_t operandIdx) {
     // add buffer if constant operand
     // buffer at index 0 is reserved for tensors without a buffer
     uint32_t bufferIdx = 0;
-    if (isConstant) {
+    if (isOperandConstant(operand)) {
         auto [data, dataLength] = getConstantPointerAndLength(operand);
         bufferIdx = addBufferFromData(data, dataLength);
     }
 
     // shape of tensor
     std::vector<int32_t> shape(operand.dimensions.begin(), operand.dimensions.end());
-    std::replace(shape.begin(), shape.end(), 0, -1);
+    replaceZeroDimensions(&shape);
 
     // build tensor
     TensorFlatbuffer tensor = tflite::CreateTensorDirect(
