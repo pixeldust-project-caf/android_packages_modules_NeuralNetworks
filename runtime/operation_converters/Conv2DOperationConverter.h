@@ -26,8 +26,7 @@ namespace nn {
 
 class Conv2DOperationConverter : public IOperationConverter {
    public:
-    // Returns true if successful
-    bool convert(const Operation& operation, SubGraphContext* context) const override;
+    Result<void> convert(const Operation& operation, SubGraphContext* context) const override;
 
    protected:
     std::vector<int32_t> getConv2DInputs(const Operation& operation,
@@ -35,9 +34,9 @@ class Conv2DOperationConverter : public IOperationConverter {
     std::vector<int32_t> getConv2DOutputs(const Operation& operation,
                                           SubGraphContext* context) const;
 
-    // Returns the output Tensor index of created Padding Operator
-    // If output is -1, the decompose is unsuccessful
-    int decomposeExplicitPadding(const Operation& operation, SubGraphContext* context) const;
+    // Returns the output Tensor index of created Padding Operator if successful
+    Result<int> decomposeExplicitPadding(const Operation& operation,
+                                         SubGraphContext* context) const;
 
    private:
     // Offset locations of BuiltinOption parameters in NNAPI Operand inputs

@@ -40,16 +40,13 @@ std::vector<int32_t> Conv2DOperationConverter::getConv2DOutputs(const Operation&
     return {context->getTensorIdxFromOperandIdx(operation.outputs[kOutputTensorIdx])};
 }
 
-int Conv2DOperationConverter::decomposeExplicitPadding(const Operation& operation,
-                                                       SubGraphContext* context) const {
+Result<int> Conv2DOperationConverter::decomposeExplicitPadding(const Operation& operation,
+                                                               SubGraphContext* context) const {
     const Model::Subgraph* subgraph = context->getSubgraph();
     const Operand& inputOperand = subgraph->operands[operation.inputs[0]];
 
-    const Dimensions& dims = inputOperand.dimensions;
-    if (dims[1] == 0 || dims[2] == 0) {
-        LOG(WARNING) << "Unknown height and width dimensions for input not supported";
-        return -1;
-    }
+    // add opcode for PAD if it does not exist yet
+    uint32_t opCodeIdx = context->addOpCode(OperationType::PAD);
 
     // pad options
     auto padOptionsFlatbuffer = tflite::CreatePadOptions(context->getBuilder());
@@ -59,13 +56,10 @@ int Conv2DOperationConverter::decomposeExplicitPadding(const Operation& operatio
     const Operand& backWidthPaddingOperand = subgraph->operands[operation.inputs[4]];
     const Operand& frontHeightPaddingOperand = subgraph->operands[operation.inputs[5]];
     const Operand& backHeightPaddingOperand = subgraph->operands[operation.inputs[6]];
-    if (!isOperandConstant(frontWidthPaddingOperand) ||
-        !isOperandConstant(backWidthPaddingOperand) ||
-        !isOperandConstant(frontHeightPaddingOperand) ||
-        !isOperandConstant(backHeightPaddingOperand)) {
-        LOG(WARNING) << "At least one Padding Operand is not a constant";
-        return -1;
-    }
+    NN_RET_CHECK(isOperandConstant(frontWidthPaddingOperand));
+    NN_RET_CHECK(isOperandConstant(backWidthPaddingOperand));
+    NN_RET_CHECK(isOperandConstant(frontHeightPaddingOperand));
+    NN_RET_CHECK(isOperandConstant(backHeightPaddingOperand));
 
     // get padding params
     int32_t frontHeightPadding = context->getConstantScalar<int32_t>(frontHeightPaddingOperand);
@@ -74,6 +68,7 @@ int Conv2DOperationConverter::decomposeExplicitPadding(const Operation& operatio
     int32_t backWidthPadding = context->getConstantScalar<int32_t>(backWidthPaddingOperand);
 
     // build padding buffer
+    const Dimensions& dims = inputOperand.dimensions;
     int numDimensionsInput = static_cast<int>(dims.size());
     std::vector<int32_t> paddingData(numDimensionsInput * 2, 0);
     paddingData[2] = frontHeightPadding;
@@ -94,13 +89,15 @@ int Conv2DOperationConverter::decomposeExplicitPadding(const Operation& operatio
     std::vector<int32_t> padInputs = {context->getTensorIdxFromOperandIdx(operation.inputs[0]),
                                       padTensorIdx};
 
-    // add opcode for pad if it does not exist yet
-    context->addOpCode(OperationType::PAD);
-
     // get dimensions of output of pad operation
     std::vector<int32_t> padToConv2dShape(dims.begin(), dims.end());
-    padToConv2dShape[1] = frontHeightPadding + padToConv2dShape[1] + backHeightPadding;
-    padToConv2dShape[2] = frontWidthPadding + padToConv2dShape[2] + backWidthPadding;
+    // keep unknown height and width dimensions unknown
+    padToConv2dShape[1] = padToConv2dShape[1] != 0
+                                  ? frontHeightPadding + padToConv2dShape[1] + backHeightPadding
+                                  : -1;
+    padToConv2dShape[2] = padToConv2dShape[2] != 0
+                                  ? frontWidthPadding + padToConv2dShape[2] + backWidthPadding
+                                  : -1;
     replaceZeroDimensions(&padToConv2dShape);
 
     // create new tensor to be output of pad & input for conv2d
@@ -114,17 +111,20 @@ int Conv2DOperationConverter::decomposeExplicitPadding(const Operation& operatio
     std::vector<int32_t> padOutputs{padToConv2dTensorIdx};
 
     OperatorFlatbuffer padOp = tflite::CreateOperatorDirect(
-            context->getBuilder(), context->getOpCodeIndex(OperationType::PAD), &padInputs,
-            &padOutputs, tflite::BuiltinOptions::BuiltinOptions_PadOptions,
-            padOptionsFlatbuffer.Union());
+            context->getBuilder(), opCodeIdx, &padInputs, &padOutputs,
+            tflite::BuiltinOptions::BuiltinOptions_PadOptions, padOptionsFlatbuffer.Union());
     context->addOperatorFlatbuffer(padOp);
 
     // Return tensor index of pad output created
     return padToConv2dTensorIdx;
 }
 
-bool Conv2DOperationConverter::convert(const Operation& operation, SubGraphContext* context) const {
+Result<void> Conv2DOperationConverter::convert(const Operation& operation,
+                                               SubGraphContext* context) const {
     const Model::Subgraph* subgraph = context->getSubgraph();
+
+    // add opcode for CONV_2D if not added yet
+    uint32_t opCodeIdx = context->addOpCode(OperationType::CONV_2D);
 
     // if there are less than 8 inputs or the input at the 7th index is a BOOL, there is implicit
     // padding
@@ -140,11 +140,7 @@ bool Conv2DOperationConverter::convert(const Operation& operation, SubGraphConte
     // if explicit padding, we need to decompose the operation to a separate padding op and a conv2d
     // op
     if (!isImplicitPadding) {
-        int padOpIdx = decomposeExplicitPadding(operation, context);
-        if (padOpIdx == -1) {
-            LOG(WARNING) << "decomposeExplicitPadding unsuccessful";
-            return false;
-        }
+        auto padOpIdx = NN_TRY(decomposeExplicitPadding(operation, context));
         inputs[0] = padOpIdx;
     }
 
@@ -152,10 +148,7 @@ bool Conv2DOperationConverter::convert(const Operation& operation, SubGraphConte
     tflite::Padding padding;
     if (isImplicitPadding) {
         const Operand& paddingTypeOperand = subgraph->operands[operation.inputs[3]];
-        if (!isOperandConstant(paddingTypeOperand)) {
-            LOG(WARNING) << "paddingTypeOperand is not a constant: " << operation.inputs[3];
-            return false;
-        }
+        NN_RET_CHECK(isOperandConstant(paddingTypeOperand));
 
         int32_t paddingType = context->getConstantScalar<int32_t>(paddingTypeOperand);
         padding = getTFLitePadding(paddingType);
@@ -171,11 +164,9 @@ bool Conv2DOperationConverter::convert(const Operation& operation, SubGraphConte
             subgraph->operands[operation.inputs[baseOptionsIdx + kStrideHOffset]];
     const Operand& activationOperand =
             subgraph->operands[operation.inputs[baseOptionsIdx + kActivationOffset]];
-    if (!isOperandConstant(strideWOperand) || !isOperandConstant(strideHOperand) ||
-        !isOperandConstant(activationOperand)) {
-        LOG(WARNING) << "strideWOperand, strideHOperand, or activationOperand is not a constant";
-        return false;
-    }
+    NN_RET_CHECK(isOperandConstant(strideWOperand));
+    NN_RET_CHECK(isOperandConstant(strideHOperand));
+    NN_RET_CHECK(isOperandConstant(activationOperand));
 
     // get strides and activation
     int32_t strideW = context->getConstantScalar<int32_t>(strideWOperand);
@@ -183,20 +174,13 @@ bool Conv2DOperationConverter::convert(const Operation& operation, SubGraphConte
     int32_t activation = context->getConstantScalar<int32_t>(activationOperand);
 
     // check for nchw
-    bool isNchw = false;
     int isNchwIdx = baseOptionsIdx + kIsNchwOffset;
     if (operation.inputs.size() > static_cast<uint32_t>(isNchwIdx)) {
         const Operand& isNchwOperand = subgraph->operands[operation.inputs[isNchwIdx]];
-        if (!isOperandConstant(isNchwOperand)) {
-            LOG(WARNING) << "isNchwOperand is not a constant";
-            return false;
-        }
+        NN_RET_CHECK(isOperandConstant(isNchwOperand));
 
-        isNchw = context->getConstantScalar<bool>(isNchwOperand);
-        if (isNchw) {
-            LOG(WARNING) << "TFLite does not support NCHW formatted input tensors";
-            return false;
-        }
+        bool isNchw = context->getConstantScalar<bool>(isNchwOperand);
+        NN_RET_CHECK(!isNchw) << "TFLite does not support NCHW formatted input tensors";
     }
 
     // dilations
@@ -207,21 +191,13 @@ bool Conv2DOperationConverter::convert(const Operation& operation, SubGraphConte
     int32_t dilationH = 1;
     if (operation.inputs.size() > static_cast<uint32_t>(dilationWIdx)) {
         const Operand& dilationWOperand = subgraph->operands[operation.inputs[dilationWIdx]];
-        if (!isOperandConstant(dilationWOperand)) {
-            LOG(WARNING) << "dilationWOperand is not a constant: "
-                         << operation.inputs[dilationWIdx];
-            return false;
-        }
+        NN_RET_CHECK(isOperandConstant(dilationWOperand));
 
         dilationW = context->getConstantScalar<int32_t>(dilationWOperand);
     }
     if (operation.inputs.size() > static_cast<uint32_t>(dilationHIdx)) {
         const Operand& dilationHOperand = subgraph->operands[operation.inputs[dilationHIdx]];
-        if (!isOperandConstant(dilationHOperand)) {
-            LOG(WARNING) << "dilationHOperand is not a constant: "
-                         << operation.inputs[dilationHIdx];
-            return false;
-        }
+        NN_RET_CHECK(isOperandConstant(dilationHOperand));
 
         dilationH = context->getConstantScalar<int32_t>(dilationHOperand);
     }
@@ -231,14 +207,13 @@ bool Conv2DOperationConverter::convert(const Operation& operation, SubGraphConte
             static_cast<tflite::ActivationFunctionType>(activation) /* fused_activation_function */,
             dilationW, dilationH);
     auto operatorFlatbuffer = tflite::CreateOperatorDirect(
-            context->getBuilder() /* builder */,
-            context->getOpCodeIndex(operation.type) /* opcode_index */, &inputs /* inputs */,
+            context->getBuilder() /* builder */, opCodeIdx /* opcode_index */, &inputs /* inputs */,
             &outputs /* outputs */,
             tflite::BuiltinOptions::BuiltinOptions_Conv2DOptions /* builtin_options_type */,
             optionsFlatbuffer.Union() /* builtin_options */);
     context->addOperatorFlatbuffer(operatorFlatbuffer);
 
-    return true;
+    return {};
 }
 
 NN_REGISTER_OPERATION_CONVERTER(CONV_2D, Conv2DOperationConverter);

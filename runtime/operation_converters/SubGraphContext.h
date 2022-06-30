@@ -33,7 +33,7 @@ class SubGraphContext {
    public:
     SubGraphContext(const Model* model, const Model::Subgraph* subgraph,
                     flatbuffers::FlatBufferBuilder* builder,
-                    std::vector<OpCodeFlatbuffer>* opCodesVector,
+                    std::vector<OperatorCodeFlatbuffer>* opCodesVector,
                     std::vector<int>* opCodeIndexForOperationType,
                     std::vector<BufferFlatbuffer>* bufferVector);
 
@@ -47,12 +47,10 @@ class SubGraphContext {
     void addSubGraphInput(int32_t operandIdx);
     void addSubGraphOutput(int32_t operandIdx);
 
-    void addOpCode(OperationType operationType);
-
     const Model::Subgraph* getSubgraph() const { return mSubgraph; }
     // Returns -1 if there is no corresponding tensor index
     int getTensorIdxFromOperandIdx(int operandIdx) const;
-    uint32_t getOpCodeIndex(OperationType operationType) const;
+    uint32_t addOpCode(OperationType operationType);
     flatbuffers::FlatBufferBuilder& getBuilder() { return *mBuilder; }
 
     // OperandLifeTime must be CONSTANT_COPY or CONSTANT_REFERENCE
@@ -75,7 +73,7 @@ class SubGraphContext {
     const Model::Subgraph* mSubgraph;
     flatbuffers::FlatBufferBuilder* mBuilder;
 
-    std::vector<OpCodeFlatbuffer>* mOpCodesVector;
+    std::vector<OperatorCodeFlatbuffer>* mOpCodesVector;
     std::vector<int>* mOpCodeIndexForOperationType;
     std::vector<BufferFlatbuffer>* mBufferVector;
 

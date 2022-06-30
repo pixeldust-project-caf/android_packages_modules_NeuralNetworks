@@ -25,7 +25,7 @@ namespace nn {
 
 SubGraphContext::SubGraphContext(const Model* model, const Model::Subgraph* subgraph,
                                  flatbuffers::FlatBufferBuilder* builder,
-                                 std::vector<OpCodeFlatbuffer>* opCodesVector,
+                                 std::vector<OperatorCodeFlatbuffer>* opCodesVector,
                                  std::vector<int>* opCodeIndexForOperationType,
                                  std::vector<BufferFlatbuffer>* bufferVector)
     : mModel(model),
@@ -74,16 +74,10 @@ void SubGraphContext::addSubGraphOutput(int32_t operandIdx) {
     mOutputTensors.push_back(mOperandToTensorIdx[operandIdx]);
 }
 
-uint32_t SubGraphContext::getOpCodeIndex(OperationType operationType) const {
-    uint32_t idx = static_cast<uint32_t>(operationType);
-    CHECK(mOpCodeIndexForOperationType->at(idx) != -1);
-    return (*mOpCodeIndexForOperationType)[idx];
-}
-
-void SubGraphContext::addOpCode(OperationType operationType) {
+uint32_t SubGraphContext::addOpCode(OperationType operationType) {
     uint32_t idx = static_cast<uint32_t>(operationType);
     if (mOpCodeIndexForOperationType->at(idx) != -1) {
-        return;
+        return mOpCodeIndexForOperationType->at(idx);
     }
 
     OperatorCodeFlatbuffer opCode;
@@ -100,7 +94,9 @@ void SubGraphContext::addOpCode(OperationType operationType) {
                                             builtinCode /* builtin_code */);
 
     mOpCodesVector->push_back(opCode);
-    (*mOpCodeIndexForOperationType)[idx] = mOpCodesVector->size() - 1;
+    uint32_t opCodeIdx = mOpCodesVector->size() - 1;
+    (*mOpCodeIndexForOperationType)[idx] = opCodeIdx;
+    return opCodeIdx;
 }
 
 int SubGraphContext::getTensorIdxFromOperandIdx(int operandIdx) const {

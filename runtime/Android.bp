@@ -175,6 +175,7 @@ cc_defaults {
     name: "libneuralnetworks_v2_defaults",
     defaults: ["libneuralnetworks_defaults"],
     srcs: [
+        "FlatbufferModelBuilder.cpp",
         "operation_converters/Conv2DOperationConverter.cpp",
         "operation_converters/OperationConverterResolver.cpp",
         "operation_converters/SubGraphContext.cpp",

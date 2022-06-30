@@ -17,6 +17,8 @@
 #ifndef ANDROID_PACKAGES_MODULES_NEURALNETWORKS_RUNTIME_FLATBUFFER_MODEL_BUILDER_UTILS_H
 #define ANDROID_PACKAGES_MODULES_NEURALNETWORKS_RUNTIME_FLATBUFFER_MODEL_BUILDER_UTILS_H
 
+#include <nnapi/Result.h>
+#include <nnapi/TypeUtils.h>
 #include <tensorflow/lite/schema/schema_generated.h>
 
 #include <algorithm>
@@ -27,9 +29,6 @@
 
 namespace android {
 namespace nn {
-
-using OpCodeFlatbuffer = flatbuffers::Offset<tflite::OperatorCode>;
-using OpCodesFlatbuffer = flatbuffers::Offset<flatbuffers::Vector<OpCodeFlatbuffer>>;
 
 using SubGraphFlatbuffer = flatbuffers::Offset<tflite::SubGraph>;
 using SubGraphsFlatbuffer = flatbuffers::Offset<flatbuffers::Vector<SubGraphFlatbuffer>>;
@@ -42,6 +41,8 @@ using TensorFlatbuffer = flatbuffers::Offset<tflite::Tensor>;
 using TensorsFlatbuffer = flatbuffers::Offset<flatbuffers::Vector<TensorFlatbuffer>>;
 
 using BufferFlatbuffer = flatbuffers::Offset<tflite::Buffer>;
+
+using MetadataFlatbuffer = flatbuffers::Offset<tflite::Metadata>;
 
 using ModelFlatbuffer = flatbuffers::Offset<tflite::Model>;
 
@@ -97,8 +98,10 @@ inline bool operandHasUnspecifiedRank(const Operand& operand) {
     return operand.dimensions.empty();
 }
 
-inline bool checkAllOperandsHaveSpecifiedRank(const std::vector<Operand>& operands) {
-    return std::none_of(operands.begin(), operands.end(), &operandHasUnspecifiedRank);
+inline Result<void> checkAllOperandsHaveSpecifiedRank(const std::vector<Operand>& operands) {
+    NN_RET_CHECK(std::none_of(operands.begin(), operands.end(), &operandHasUnspecifiedRank))
+            << "At least one Operand has unspecified rank";
+    return {};
 }
 
 inline bool isOperandConstant(const Operand& operand) {
