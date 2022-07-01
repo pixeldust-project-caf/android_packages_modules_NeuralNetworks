@@ -18,6 +18,8 @@
 
 #include "SubGraphContext.h"
 
+#include <limits>
+
 #include "FlatbufferModelBuilderUtils.h"
 
 namespace android {
@@ -142,20 +144,25 @@ uint32_t SubGraphContext::addBufferFromData(const uint8_t* data, uint32_t length
     return mBufferVector->size() - 1;
 }
 
-void SubGraphContext::createTensorFlatbufferFromOperand(uint32_t operandIdx) {
+Result<void> SubGraphContext::createTensorFlatbufferFromOperand(uint32_t operandIdx,
+                                                                bool makeSymmetric) {
     // An output Operand to one Operation can be an input Operand to
     // another Operation, so this function can be run more than once.
     // We simply return if the Tensor for the Operand is already created.
-    if (mOperandToTensorIdx[operandIdx] != -1) return;
+    if (mOperandToTensorIdx[operandIdx] != -1) return {};
 
     const Operand& operand = mSubgraph->operands[operandIdx];
 
     std::vector<float> scaleVector{operand.scale};
     std::vector<int64_t> zeroPointVector{operand.zeroPoint};
+    // min and max used to convert TFLite models to TF models, so it is unused in this case and can
+    // be set to 0
+    std::vector<float> minVector{0};
+    std::vector<float> maxVector{0};
 
     // build quantization parameters
     auto quantizationParams = tflite::CreateQuantizationParametersDirect(
-            *mBuilder, 0 /* min */, 0 /* max */, &scaleVector /* scale */,
+            *mBuilder, &minVector /* min */, &maxVector /* max */, &scaleVector /* scale */,
             &zeroPointVector /* zero_point */,
             tflite::QuantizationDetails::QuantizationDetails_NONE /* details_type */);
 
@@ -164,7 +171,30 @@ void SubGraphContext::createTensorFlatbufferFromOperand(uint32_t operandIdx) {
     uint32_t bufferIdx = 0;
     if (isOperandConstant(operand)) {
         auto [data, dataLength] = getConstantPointerAndLength(operand);
-        bufferIdx = addBufferFromData(data, dataLength);
+        if (makeSymmetric && operand.type == OperandType::TENSOR_QUANT8_ASYMM_SIGNED) {
+            std::vector<int8_t> dataVector(reinterpret_cast<const int8_t*>(data),
+                                           reinterpret_cast<const int8_t*>(data) + dataLength);
+            bool emitWarning = false;
+            for (uint32_t i = 0; i < dataLength; i++) {
+                int32_t newValue = static_cast<int32_t>(dataVector[i]) - operand.zeroPoint;
+                if (newValue < std::numeric_limits<int8_t>::min() ||
+                    newValue > std::numeric_limits<int8_t>::max()) {
+                    emitWarning = true;
+                }
+                dataVector[i] = static_cast<int8_t>(std::clamp(
+                        newValue, static_cast<int32_t>(std::numeric_limits<int8_t>::min()),
+                        static_cast<int32_t>(std::numeric_limits<int8_t>::max())));
+            }
+
+            if (emitWarning) {
+                LOG(WARNING) << "Asymmetric to symmetric conversion will result in "
+                                "underflow/overflow. Clamping data";
+            }
+            bufferIdx = addBufferFromData(reinterpret_cast<const uint8_t*>(dataVector.data()),
+                                          dataLength);
+        } else {
+            bufferIdx = addBufferFromData(data, dataLength);
+        }
     }
 
     // shape of tensor
@@ -173,9 +203,11 @@ void SubGraphContext::createTensorFlatbufferFromOperand(uint32_t operandIdx) {
 
     // build tensor
     TensorFlatbuffer tensor = tflite::CreateTensorDirect(
-            *mBuilder, &shape, getTensorFlatbufferOperandType(operand.type) /* type */,
+            *mBuilder, &shape, NN_TRY(getTensorFlatbufferOperandType(operand.type)) /* type */,
             bufferIdx /* buffer */, 0 /* name */, quantizationParams /* quantization */);
     addTensorFlatbuffer(tensor, operandIdx);
+
+    return {};
 }
 
 }  // namespace nn

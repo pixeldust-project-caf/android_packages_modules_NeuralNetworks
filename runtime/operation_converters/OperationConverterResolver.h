@@ -33,8 +33,6 @@ class OperationConverterResolver {
     }
     const IOperationConverter* findOperationConverter(OperationType operationType) const;
 
-    static constexpr int kNumberOfOperationTypes = 106;
-
    private:
     OperationConverterResolver();
 

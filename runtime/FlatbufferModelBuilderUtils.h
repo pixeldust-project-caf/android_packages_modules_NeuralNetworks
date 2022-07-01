@@ -48,22 +48,19 @@ using ModelFlatbuffer = flatbuffers::Offset<tflite::Model>;
 
 // Only supports tensor types
 // Will crash if passed in a scalar type
-inline tflite::TensorType getTensorFlatbufferOperandType(const OperandType& type) {
+inline Result<tflite::TensorType> getTensorFlatbufferOperandType(const OperandType& type) {
     CHECK(TypeManager::get()->isTensorType(type));
 
     // TODO: Map more operands
     switch (type) {
         case OperandType::TENSOR_FLOAT32:
             return tflite::TensorType::TensorType_FLOAT32;
-        case OperandType::TENSOR_FLOAT16:
-            return tflite::TensorType::TensorType_FLOAT16;
         case OperandType::TENSOR_INT32:
             return tflite::TensorType::TensorType_INT32;
         case OperandType::TENSOR_QUANT8_ASYMM_SIGNED:
             return tflite::TensorType::TensorType_INT8;
         default:
-            LOG(FATAL) << "OperandType not supported: " << type;
-            return {};
+            NN_RET_CHECK_FAIL() << "OperandType not supported: " << type;
     }
 }
 
@@ -94,13 +91,27 @@ inline int32_t getMaxOperatorVersionCode(tflite::BuiltinOperator builtinCode) {
     }
 }
 
-inline bool operandHasUnspecifiedRank(const Operand& operand) {
-    return operand.dimensions.empty();
+inline bool tensorOperandHasUnspecifiedRank(const Operand& operand) {
+    return TypeManager::get()->isTensorType(operand.type) && operand.dimensions.empty();
 }
 
-inline Result<void> checkAllOperandsHaveSpecifiedRank(const std::vector<Operand>& operands) {
-    NN_RET_CHECK(std::none_of(operands.begin(), operands.end(), &operandHasUnspecifiedRank))
+inline Result<void> checkAllTensorOperandsHaveSpecifiedRank(const std::vector<Operand>& operands) {
+    NN_RET_CHECK(std::none_of(operands.begin(), operands.end(), &tensorOperandHasUnspecifiedRank))
             << "At least one Operand has unspecified rank";
+    return {};
+}
+
+inline bool subgraphOutputOperandHasDynamicShape(const Operand& operand) {
+    return operand.lifetime == Operand::LifeTime::SUBGRAPH_OUTPUT &&
+           std::any_of(operand.dimensions.begin(), operand.dimensions.end(),
+                       [](const uint32_t& dim) { return dim == 0; });
+}
+
+inline Result<void> checkNoSubgraphOutputOperandsHaveDynamicShape(
+        const std::vector<Operand>& operands) {
+    NN_RET_CHECK(
+            std::none_of(operands.begin(), operands.end(), &subgraphOutputOperandHasDynamicShape))
+            << "At least one subgraph output Operand has dynamic shape";
     return {};
 }
 

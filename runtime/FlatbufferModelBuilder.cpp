@@ -18,6 +18,8 @@
 
 #include "FlatbufferModelBuilder.h"
 
+#include <LegacyUtils.h>
+
 #include "FlatbufferModelBuilderUtils.h"
 #include "operation_converters/OperationConverterResolver.h"
 
@@ -38,6 +40,11 @@ void FlatbufferModelBuilder::initializeBufferVector() {
     mBufferVector.push_back(emptyBuffer);
 }
 
+void FlatbufferModelBuilder::initializeOpCodeIndexForOperationType() {
+    mOpCodeIndexForOperationType.clear();
+    mOpCodeIndexForOperationType.resize(kNumberOfOperationTypes, -1);
+}
+
 std::vector<MetadataFlatbuffer> FlatbufferModelBuilder::createMetadataVector() {
     std::vector<MetadataFlatbuffer> metadataVector;
     for (uint32_t i = 0; i < mBufferVector.size(); i++) {
@@ -54,19 +61,19 @@ Result<const tflite::Model*> FlatbufferModelBuilder::createTfliteModel() {
     // Initialize and clear data structures
     initializeBufferVector();
     mOpCodesVector.clear();
-    mOpCodeIndexForOperationType.clear();
+    initializeOpCodeIndexForOperationType();
 
     // Generate subgraphs
     auto subgraphsVector = NN_TRY(createSubGraphs());
 
     auto metadataVector = createMetadataVector();
 
-    ModelFlatbuffer model = tflite::CreateModelDirect(
+    ModelFlatbuffer flatbufferModel = tflite::CreateModelDirect(
             mBuilder, 3 /* version*/, &mOpCodesVector /* operator_codes */,
             &subgraphsVector /* subgraphs */, nullptr /* description */,
             &mBufferVector /* buffers */, nullptr /* metadata_buffer */,
             &metadataVector /* metadata */);
-    mBuilder.Finish(model);
+    mBuilder.Finish(flatbufferModel);
 
     const tflite::Model* tfliteModel = tflite::GetModel(mBuilder.GetBufferPointer());
     verifyModel(tfliteModel);
@@ -76,7 +83,9 @@ Result<const tflite::Model*> FlatbufferModelBuilder::createTfliteModel() {
 Result<SubGraphFlatbuffer> FlatbufferModelBuilder::createSubGraphFlatbuffer(
         const Model::Subgraph& subgraph) {
     // TFLite does not support unspecified ranks in Operands
-    NN_TRY(checkAllOperandsHaveSpecifiedRank(subgraph.operands));
+    NN_TRY(checkAllTensorOperandsHaveSpecifiedRank(subgraph.operands));
+    // TFLite does not support dynamic shapes for subgrah output Operands
+    NN_TRY(checkNoSubgraphOutputOperandsHaveDynamicShape(subgraph.operands));
 
     SubGraphContext context(&mModel, &subgraph, &mBuilder, &mOpCodesVector,
                             &mOpCodeIndexForOperationType, &mBufferVector);

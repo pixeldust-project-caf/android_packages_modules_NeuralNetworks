@@ -24,20 +24,29 @@
 namespace android {
 namespace nn {
 
-std::vector<int32_t> Conv2DOperationConverter::getConv2DInputs(const Operation& operation,
-                                                               SubGraphContext* context) const {
-    context->createTensorFlatbufferFromOperand(operation.inputs[kInputTensorIdx]);
-    context->createTensorFlatbufferFromOperand(operation.inputs[kFilterTensorIdx]);
-    context->createTensorFlatbufferFromOperand(operation.inputs[kBiasTensorIdx]);
-    return {context->getTensorIdxFromOperandIdx(operation.inputs[kInputTensorIdx]),
+Result<std::vector<int32_t>> Conv2DOperationConverter::getConv2DInputs(
+        const Operation& operation, SubGraphContext* context) const {
+    NN_RET_CHECK(isOperandConstant(
+            context->getSubgraph()->operands[operation.inputs[kFilterTensorIdx]]));
+
+    NN_TRY(context->createTensorFlatbufferFromOperand(operation.inputs[kInputTensorIdx]));
+    // TFLite does not support asymmetric tensors for convolution filters
+    NN_TRY(context->createTensorFlatbufferFromOperand(operation.inputs[kFilterTensorIdx],
+                                                      true /* makeSymmetric */));
+    NN_TRY(context->createTensorFlatbufferFromOperand(operation.inputs[kBiasTensorIdx]));
+    std::vector<int32_t> inputs{
+            context->getTensorIdxFromOperandIdx(operation.inputs[kInputTensorIdx]),
             context->getTensorIdxFromOperandIdx(operation.inputs[kFilterTensorIdx]),
             context->getTensorIdxFromOperandIdx(operation.inputs[kBiasTensorIdx])};
+    return inputs;
 }
 
-std::vector<int32_t> Conv2DOperationConverter::getConv2DOutputs(const Operation& operation,
-                                                                SubGraphContext* context) const {
-    context->createTensorFlatbufferFromOperand(operation.outputs[kOutputTensorIdx]);
-    return {context->getTensorIdxFromOperandIdx(operation.outputs[kOutputTensorIdx])};
+Result<std::vector<int32_t>> Conv2DOperationConverter::getConv2DOutputs(
+        const Operation& operation, SubGraphContext* context) const {
+    NN_TRY(context->createTensorFlatbufferFromOperand(operation.outputs[kOutputTensorIdx]));
+    std::vector<int32_t> outputs{
+            context->getTensorIdxFromOperandIdx(operation.outputs[kOutputTensorIdx])};
+    return outputs;
 }
 
 Result<int> Conv2DOperationConverter::decomposeExplicitPadding(const Operation& operation,
@@ -100,11 +109,23 @@ Result<int> Conv2DOperationConverter::decomposeExplicitPadding(const Operation& 
                                   : -1;
     replaceZeroDimensions(&padToConv2dShape);
 
+    // build quantization parameters
+    std::vector<float> scaleVector{inputOperand.scale};
+    std::vector<int64_t> zeroPointVector{inputOperand.zeroPoint};
+    // min and max used to convert TFLite models to TF models, so it is unused in this case and can
+    // be set to 0
+    std::vector<float> minVector{0};
+    std::vector<float> maxVector{0};
+    auto quantizationParams = tflite::CreateQuantizationParametersDirect(
+            context->getBuilder(), &minVector /* min */, &maxVector /* max */,
+            &scaleVector /* scale */, &zeroPointVector /* zero_point */,
+            tflite::QuantizationDetails::QuantizationDetails_NONE /* details_type */);
+
     // create new tensor to be output of pad & input for conv2d
     auto padToConv2dTensor = tflite::CreateTensorDirect(
             context->getBuilder(), &padToConv2dShape /* shape */,
-            getTensorFlatbufferOperandType(subgraph->operands[operation.inputs[0]].type) /* type */,
-            0 /* buffer */);
+            NN_TRY(getTensorFlatbufferOperandType(inputOperand.type)) /* type */, 0 /* buffer */,
+            0 /* name */, quantizationParams /* quantization */);
     int padToConv2dTensorIdx = context->addTensorFlatbuffer(padToConv2dTensor);
 
     // set output for padding operation and add to operators
@@ -134,8 +155,8 @@ Result<void> Conv2DOperationConverter::convert(const Operation& operation,
         isImplicitPadding = true;
     }
 
-    std::vector<int32_t> inputs = getConv2DInputs(operation, context);
-    std::vector<int32_t> outputs = getConv2DOutputs(operation, context);
+    std::vector<int32_t> inputs = NN_TRY(getConv2DInputs(operation, context));
+    std::vector<int32_t> outputs = NN_TRY(getConv2DOutputs(operation, context));
 
     // if explicit padding, we need to decompose the operation to a separate padding op and a conv2d
     // op

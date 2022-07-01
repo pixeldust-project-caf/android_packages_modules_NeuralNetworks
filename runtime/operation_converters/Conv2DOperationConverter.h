@@ -29,10 +29,10 @@ class Conv2DOperationConverter : public IOperationConverter {
     Result<void> convert(const Operation& operation, SubGraphContext* context) const override;
 
    protected:
-    std::vector<int32_t> getConv2DInputs(const Operation& operation,
-                                         SubGraphContext* context) const;
-    std::vector<int32_t> getConv2DOutputs(const Operation& operation,
-                                          SubGraphContext* context) const;
+    Result<std::vector<int32_t>> getConv2DInputs(const Operation& operation,
+                                                 SubGraphContext* context) const;
+    Result<std::vector<int32_t>> getConv2DOutputs(const Operation& operation,
+                                                  SubGraphContext* context) const;
 
     // Returns the output Tensor index of created Padding Operator if successful
     Result<int> decomposeExplicitPadding(const Operation& operation,

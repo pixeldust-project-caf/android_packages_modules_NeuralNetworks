@@ -176,9 +176,14 @@ cc_defaults {
     defaults: ["libneuralnetworks_defaults"],
     srcs: [
         "FlatbufferModelBuilder.cpp",
+        "NeuralNetworksV2.cpp",
         "operation_converters/Conv2DOperationConverter.cpp",
         "operation_converters/OperationConverterResolver.cpp",
         "operation_converters/SubGraphContext.cpp",
+    ],
+
+    exclude_srcs: [
+        "NeuralNetworks.cpp",
     ],
 
     static_libs: [
@@ -225,14 +230,6 @@ cc_library_static {
     apex_available: ["//apex_available:platform"],
 }
 
-cc_library_static {
-    name: "libneuralnetworks_v2_static",
-    defaults: [
-        "libneuralnetworks_v2_defaults",
-        "neuralnetworks_defaults",
-    ],
-}
-
 // Required for tests (b/147158681)
 cc_library_static {
     name: "libneuralnetworks_static_experimental",
@@ -251,6 +248,24 @@ cc_library_static {
     ],
     cflags: ["-DNN_EXPERIMENTAL_FEATURE"],
     apex_available: ["//apex_available:platform"],
+}
+
+cc_library_static {
+    name: "libneuralnetworks_v2_static_experimental",
+    defaults: [
+        "libneuralnetworks_v2_defaults",
+        "neuralnetworks_defaults",
+    ],
+    exclude_static_libs: [
+        "libneuralnetworks_common",
+        "neuralnetworks_types",
+        "server_configurable_flags",
+    ],
+    static_libs: [
+        "libneuralnetworks_common_experimental",
+        "neuralnetworks_types_experimental",
+    ],
+    cflags: ["-DNN_EXPERIMENTAL_FEATURE"],
 }
 
 cc_library_static {

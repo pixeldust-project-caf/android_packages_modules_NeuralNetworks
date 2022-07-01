@@ -63,7 +63,10 @@ class SubGraphContext {
 
     // Returns Buffer index
     uint32_t addBufferFromData(const uint8_t* data, uint32_t length);
-    void createTensorFlatbufferFromOperand(uint32_t operandIdx);
+    // makeSymmetric turns asymmetric tensors to symmetric by doing setting data = data - zeroPoint
+    // makeSymmetric is supported only for constant OperandType::TENSOR_QUANT8_ASYMM_SIGNED
+    // If unsupported type is passed, makeSymmetric is ignored
+    Result<void> createTensorFlatbufferFromOperand(uint32_t operandIdx, bool makeSymmetric = false);
 
    private:
     const Mapping& getMapping(uint32_t poolIndex);

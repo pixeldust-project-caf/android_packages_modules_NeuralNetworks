@@ -40,6 +40,8 @@ class FlatbufferModelBuilder : public ModelBuilder {
     // Clears mBufferVector and initializes the first Buffer to be an empty Buffer
     // for Tensors that do not have a buffer.
     void initializeBufferVector();
+    // Clears mOpCodeIndexForOperationType and initializes elements to be -1
+    void initializeOpCodeIndexForOperationType();
 
     // Helper functions to convert Subgraphs
     Result<SubGraphFlatbuffer> createSubGraphFlatbuffer(const Model::Subgraph& subgraph);
