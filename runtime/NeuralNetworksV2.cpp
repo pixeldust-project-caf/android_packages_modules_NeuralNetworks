@@ -45,6 +45,13 @@
 #include "NeuralNetworksOEM.h"
 #include "Telemetry.h"
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#include "tensorflow/lite/interpreter.h"
+#include "tensorflow/lite/kernels/register.h"
+#include "tensorflow/lite/model.h"
+#pragma clang diagnostic pop
+
 using namespace android::nn;
 
 // Make sure the constants defined in the header files have not changed values.
@@ -786,55 +793,34 @@ int ANeuralNetworksModel_getSupportedOperationsForDevices(
     return ANEURALNETWORKS_NO_ERROR;
 }
 
-int ANeuralNetworksCompilation_createForDevices(ANeuralNetworksModel* model,
-                                                const ANeuralNetworksDevice* const* devices,
-                                                uint32_t numDevices,
-                                                ANeuralNetworksCompilation** compilation) {
+int ANeuralNetworksCompilation_createForDevices(ANeuralNetworksModel* /* model */,
+                                                const ANeuralNetworksDevice* const* /* devices */,
+                                                uint32_t /* numDevices */,
+                                                ANeuralNetworksCompilation** /* compilation */) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION, "ANeuralNetworksCompilation_createForDevices");
-    if (model == nullptr || devices == nullptr || compilation == nullptr) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_createForDevices passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-
-    if (numDevices == 0) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_createForDevices passed an empty device list";
-        return ANEURALNETWORKS_BAD_DATA;
-    }
-
-    std::vector<std::shared_ptr<Device>> selectedDevices;
-    for (uint32_t i = 0; i < numDevices; i++) {
-        if (devices[i] == nullptr) {
-            LOG(ERROR)
-                    << "ANeuralNetworksCompilation_createForDevices passed a nullptr as a device";
-            return ANEURALNETWORKS_UNEXPECTED_NULL;
-        }
-        for (uint32_t j = i + 1; j < numDevices; j++) {
-            if (devices[i] == devices[j]) {
-                LOG(ERROR)
-                        << "ANeuralNetworksCompilation_createForDevices passed duplicate devices";
-                return ANEURALNETWORKS_BAD_DATA;
-            }
-        }
-        for (auto& device : DeviceManager::get()->getDrivers()) {
-            if (device.get() == reinterpret_cast<const Device*>(devices[i])) {
-                // Find a match
-                selectedDevices.push_back(device);
-                break;
-            }
-        }
-    }
-
-    if (selectedDevices.size() != numDevices) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_createForDevices passed an invalid device set";
-        return ANEURALNETWORKS_BAD_DATA;
-    }
-    FlatbufferModelBuilder* m = reinterpret_cast<FlatbufferModelBuilder*>(model);
-    CompilationBuilder* c = nullptr;
-    // No CPU fallback when user specifies the list of devices manually.
-    int result = m->createCompilation(&c, selectedDevices, /* explicitDeviceList */ true);
-    *compilation = reinterpret_cast<ANeuralNetworksCompilation*>(c);
-    return result;
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksCompilation_createForDevices unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
+
+struct ExecutionContext {
+    // inputs are always copied before execution while outputs may be set by custom allocation
+    std::vector<void*> outputs;
+    std::vector<size_t> outputSizes;
+    std::vector<bool> isOutputSpecifiedAtIndex;
+    std::vector<const void*> inputs;
+    std::vector<size_t> inputSizes;
+
+    std::unique_ptr<tflite::Interpreter> interpreter;
+
+    ExecutionContext(std::unique_ptr<tflite::Interpreter> interpreter)
+        : outputs(interpreter->outputs().size()),
+          outputSizes(interpreter->outputs().size()),
+          isOutputSpecifiedAtIndex(interpreter->outputs().size(), false),
+          inputs(interpreter->inputs().size()),
+          inputSizes(interpreter->inputs().size()),
+          interpreter(std::move(interpreter)) {}
+};
 
 int ANeuralNetworksExecution_compute(ANeuralNetworksExecution* execution) {
     NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_compute");
@@ -842,42 +828,61 @@ int ANeuralNetworksExecution_compute(ANeuralNetworksExecution* execution) {
         LOG(ERROR) << "ANeuralNetworksExecution_compute passed a nullptr";
         return ANEURALNETWORKS_UNEXPECTED_NULL;
     }
-    // TODO validate the rest
 
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->computeSynchronously();
-}
-
-int ANeuralNetworksExecution_setMeasureTiming(ANeuralNetworksExecution* execution, bool measure) {
-    NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_setMeasureTiming");
-    if (!execution) {
-        LOG(ERROR) << "ANeuralNetworksExecution_setMeasureTiming passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
+    auto context = reinterpret_cast<ExecutionContext*>(execution);
+    if (std::any_of(context->isOutputSpecifiedAtIndex.begin(),
+                    context->isOutputSpecifiedAtIndex.end(), [](bool isSet) { return !isSet; })) {
+        LOG(ERROR) << "ANeuralNetworksExecution_compute not all output buffers are specified";
+        return ANEURALNETWORKS_BAD_DATA;
     }
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->setMeasureTiming(measure);
-}
 
-int ANeuralNetworksExecution_getDuration(const ANeuralNetworksExecution* execution,
-                                         int32_t durationCode, uint64_t* duration) {
-    NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_getDuration");
-    if (!execution || !duration) {
-        LOG(ERROR) << "ANeuralNetworksExecution_getDuration passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
+    auto result = context->interpreter->AllocateTensors();
+    if (result != kTfLiteOk) {
+        LOG(ERROR) << "ANeuralNetworksExecution_compute allocate tensors failed";
+        return ANEURALNETWORKS_OP_FAILED;
     }
-    switch (durationCode) {
-        case ANEURALNETWORKS_DURATION_ON_HARDWARE:
-        case ANEURALNETWORKS_DURATION_IN_DRIVER:
-        case ANEURALNETWORKS_FENCED_DURATION_ON_HARDWARE:
-        case ANEURALNETWORKS_FENCED_DURATION_IN_DRIVER:
-            break;
-        default:
-            LOG(ERROR) << "ANeuralNetworksExecution_getDuration passed a bad durationCode "
-                       << durationCode;
+
+    for (uint32_t index = 0; index < context->interpreter->inputs().size();
+         index++) {
+        const void* buffer = context->inputs[index];
+        if (buffer == nullptr) {
+            LOG(ERROR) << "ANeuralNetworksExecution_compute not all input buffers are specified";
             return ANEURALNETWORKS_BAD_DATA;
+        }
+        size_t length = context->inputSizes[index];
+        std::memcpy(context->interpreter->input_tensor(index)->data.raw, buffer, length);
     }
-    const ExecutionBuilder* r = reinterpret_cast<const ExecutionBuilder*>(execution);
-    return r->getDuration(durationCode, duration);
+
+    if (context->interpreter->Invoke() != kTfLiteOk) {
+        return ANEURALNETWORKS_OP_FAILED;
+    }
+
+    for (uint32_t i = 0; i < context->interpreter->outputs().size(); i++) {
+        if (context->outputs[i] == nullptr) {
+            continue;
+        }
+
+        const size_t bufferSize = context->outputSizes[i];
+        std::memcpy(context->outputs[i], context->interpreter->output_tensor(i)->data.raw,
+                    bufferSize);
+    }
+    return ANEURALNETWORKS_NO_ERROR;
+}
+
+int ANeuralNetworksExecution_setMeasureTiming(ANeuralNetworksExecution* /* execution */,
+                                              bool /* measure */) {
+    NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_setMeasureTiming");
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_setMeasureTiming unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
+}
+
+int ANeuralNetworksExecution_getDuration(const ANeuralNetworksExecution* /* execution */,
+                                         int32_t /* durationCode */, uint64_t* /* duration */) {
+    NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_getDuration");
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_getDuration unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksBurst_create(ANeuralNetworksCompilation* compilation,
@@ -902,35 +907,12 @@ void ANeuralNetworksBurst_free(ANeuralNetworksBurst* burst) {
     delete b;
 }
 
-int ANeuralNetworksExecution_burstCompute(ANeuralNetworksExecution* execution,
-                                          ANeuralNetworksBurst* burst) {
+int ANeuralNetworksExecution_burstCompute(ANeuralNetworksExecution* /* execution */,
+                                          ANeuralNetworksBurst* /* burst */) {
     NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_burstCompute");
-    if (!execution || !burst) {
-        LOG(ERROR) << "ANeuralNetworksExecution_burstCompute passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    BurstBuilder* b = reinterpret_cast<BurstBuilder*>(burst);
-
-    if (r->getCompilation() != b->getCompilation()) {
-        LOG(ERROR) << "ANeuralNetworksBurst and ANeuralNetworksExecution "
-                      "used in ANeuralNetworksExecution_burstCompute must "
-                      "originate from the same ANeuralNetworksCompilation";
-        return ANEURALNETWORKS_BAD_DATA;
-    }
-
-    const bool locked = b->tryLock();
-    if (!locked) {
-        LOG(ERROR) << "ANeuralNetworksBurst is already being used in another "
-                      "call to ANeuralNetworksExecution_burstCompute";
-        return ANEURALNETWORKS_BAD_STATE;
-    }
-
-    const int n = r->burstCompute(b);
-    b->unlock();
-
-    return n;
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_burstCompute unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksMemoryDesc_create(ANeuralNetworksMemoryDesc** desc) {
@@ -1207,6 +1189,14 @@ int ANeuralNetworksModel_relaxComputationFloat32toFloat16(ANeuralNetworksModel* 
     return m->relaxComputationFloat32toFloat16(allow);
 }
 
+struct CompilationContext {
+    std::unique_ptr<tflite::FlatBufferModel> flatBufferModel;
+    bool isFinished;
+
+    CompilationContext(std::unique_ptr<tflite::FlatBufferModel> flatBufferModel)
+        : flatBufferModel(std::move(flatBufferModel)), isFinished(false) {}
+};
+
 int ANeuralNetworksCompilation_create(ANeuralNetworksModel* model,
                                       ANeuralNetworksCompilation** compilation) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION, "ANeuralNetworksCompilation_create");
@@ -1216,42 +1206,47 @@ int ANeuralNetworksCompilation_create(ANeuralNetworksModel* model,
     }
 
     FlatbufferModelBuilder* m = reinterpret_cast<FlatbufferModelBuilder*>(model);
-    CompilationBuilder* c = nullptr;
 
-    const auto& drivers = DeviceManager::get()->getDrivers();
+    auto tfliteModel = m->createTfliteModel();
+    if (!tfliteModel.ok()) {
+        LOG(ERROR) << "ANeuralNetworksCompilation_create error: " << tfliteModel.error();
+        return ANEURALNETWORKS_OP_FAILED;
+    }
 
-    int result = m->createCompilation(&c, drivers);
-    *compilation = reinterpret_cast<ANeuralNetworksCompilation*>(c);
-    return result;
+    std::unique_ptr<tflite::FlatBufferModel> flatBufferModel =
+            tflite::FlatBufferModel::BuildFromModel(tfliteModel.value());
+    if (!flatBufferModel) {
+        LOG(ERROR) << "ANeuralNetworksCompilation_create error: tflite::BuildFromModel error";
+        return ANEURALNETWORKS_OP_FAILED;
+    }
+
+    std::unique_ptr<CompilationContext> context =
+            std::make_unique<CompilationContext>(std::move(flatBufferModel));
+    *compilation = reinterpret_cast<ANeuralNetworksCompilation*>(context.release());
+    return ANEURALNETWORKS_NO_ERROR;
 }
 
 void ANeuralNetworksCompilation_free(ANeuralNetworksCompilation* compilation) {
     NNTRACE_RT(NNTRACE_PHASE_TERMINATION, "ANeuralNetworksCompilation_free");
     // No validation.  Free of nullptr is valid.
-    CompilationBuilder* c = reinterpret_cast<CompilationBuilder*>(compilation);
+    auto c = reinterpret_cast<CompilationContext*>(compilation);
     delete c;
 }
 
-int ANeuralNetworksCompilation_setPreference(ANeuralNetworksCompilation* compilation,
-                                             int32_t preference) {
+int ANeuralNetworksCompilation_setPreference(ANeuralNetworksCompilation* /* compilation */,
+                                             int32_t /* preference */) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION, "ANeuralNetworksCompilation_setPreference");
-    if (!compilation) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_setPreference passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    CompilationBuilder* c = reinterpret_cast<CompilationBuilder*>(compilation);
-    return c->setPreference(preference);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksCompilation_setPreference unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
-int ANeuralNetworksCompilation_setCaching(ANeuralNetworksCompilation* compilation,
-                                          const char* cacheDir, const uint8_t* token) {
+int ANeuralNetworksCompilation_setCaching(ANeuralNetworksCompilation* /* compilation */,
+                                          const char* /* cacheDir */, const uint8_t* /* token */) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION, "ANeuralNetworksCompilation_setCaching");
-    if (!compilation || !cacheDir || !token) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_setCaching passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    CompilationBuilder* c = reinterpret_cast<CompilationBuilder*>(compilation);
-    return c->setCaching(cacheDir, token);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksCompilation_setCaching unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksCompilation_finish(ANeuralNetworksCompilation* compilation) {
@@ -1260,32 +1255,31 @@ int ANeuralNetworksCompilation_finish(ANeuralNetworksCompilation* compilation) {
         LOG(ERROR) << "ANeuralNetworksCompilation_finish passed a nullptr";
         return ANEURALNETWORKS_UNEXPECTED_NULL;
     }
-    CompilationBuilder* c = reinterpret_cast<CompilationBuilder*>(compilation);
-    int result = c->finish();
-    telemetry::onCompilationFinish(c, result);
 
-    return result;
+    auto context = reinterpret_cast<CompilationContext*>(compilation);
+    if (context->isFinished) {
+        LOG(ERROR) << "ANeuralNetworksCompilation_finish has already been called";
+        return ANEURALNETWORKS_BAD_STATE;
+    }
+    context->isFinished = true;
+
+    return ANEURALNETWORKS_NO_ERROR;
 }
 
-int ANeuralNetworksCompilation_setPriority(ANeuralNetworksCompilation* compilation, int priority) {
+int ANeuralNetworksCompilation_setPriority(ANeuralNetworksCompilation* /* compilation */,
+                                           int /* priority */) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION, "ANeuralNetworksCompilation_setPriority");
-    if (!compilation) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_setPriority passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    CompilationBuilder* c = reinterpret_cast<CompilationBuilder*>(compilation);
-    return c->setPriority(priority);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksCompilation_setPriority unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
-int ANeuralNetworksCompilation_setTimeout(ANeuralNetworksCompilation* compilation,
-                                          uint64_t duration) {
+int ANeuralNetworksCompilation_setTimeout(ANeuralNetworksCompilation* /* compilation */,
+                                          uint64_t /* duration */) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION, "ANeuralNetworksCompilation_setTimeout");
-    if (!compilation) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_setTimeout passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    CompilationBuilder* c = reinterpret_cast<CompilationBuilder*>(compilation);
-    return c->setTimeoutDuration(duration);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksCompilation_setTimeout unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksExecution_create(ANeuralNetworksCompilation* compilation,
@@ -1295,139 +1289,160 @@ int ANeuralNetworksExecution_create(ANeuralNetworksCompilation* compilation,
         LOG(ERROR) << "ANeuralNetworksExecution_create passed a nullptr";
         return ANEURALNETWORKS_UNEXPECTED_NULL;
     }
+    auto c = reinterpret_cast<CompilationContext*>(compilation);
 
-    CompilationBuilder* c = reinterpret_cast<CompilationBuilder*>(compilation);
-    ExecutionBuilder* r = nullptr;
-    int result = c->createExecution(&r);
-    *execution = reinterpret_cast<ANeuralNetworksExecution*>(r);
-    return result;
+    tflite::ops::builtin::BuiltinOpResolver resolver;
+    std::unique_ptr<tflite::Interpreter> interpreter;
+    auto status = tflite::InterpreterBuilder(*c->flatBufferModel, resolver)(&interpreter);
+    if (status != kTfLiteOk) {
+        LOG(ERROR) << "ANeuralNetworksExecution_create error: interpreter build status " << status
+                   << " != " << kTfLiteOk;
+        return ANEURALNETWORKS_OP_FAILED;
+    }
+
+    std::unique_ptr<ExecutionContext> context =
+            std::make_unique<ExecutionContext>(std::move(interpreter));
+    *execution = reinterpret_cast<ANeuralNetworksExecution*>(context.release());
+    return ANEURALNETWORKS_NO_ERROR;
 }
 
 void ANeuralNetworksExecution_free(ANeuralNetworksExecution* execution) {
     NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_free");
     // Free of nullptr is valid.
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    if (r && r->inFlight()) {
-        LOG(ERROR) << "ANeuralNetworksExecution_free passed an in-flight ANeuralNetworksExecution"
-                   << " and is therefore ignored";
-        return;
-    }
+    auto r = reinterpret_cast<ExecutionContext*>(execution);
     delete r;
 }
 
-int ANeuralNetworksExecution_getOutputOperandRank(ANeuralNetworksExecution* execution,
-                                                  int32_t index, uint32_t* rank) {
+int ANeuralNetworksExecution_getOutputOperandRank(ANeuralNetworksExecution* /* execution */,
+                                                  int32_t /* index */, uint32_t* /* rank */) {
     NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_getOutputOperandRank");
-    if (!execution || !rank) {
-        LOG(ERROR) << "ANeuralNetworksExecution_getOutputOperandRank passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->getOutputOperandRank(index, rank);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR)
+            << "ANeuralNetworksExecution_getOutputOperandRank unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
-int ANeuralNetworksExecution_getOutputOperandDimensions(ANeuralNetworksExecution* execution,
-                                                        int32_t index, uint32_t* dimensions) {
+int ANeuralNetworksExecution_getOutputOperandDimensions(ANeuralNetworksExecution* /* execution */,
+                                                        int32_t /* index */,
+                                                        uint32_t* /* dimensions */) {
     NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_getOutputOperandDimensions");
-    if (!execution || !dimensions) {
-        LOG(ERROR) << "ANeuralNetworksExecution_getOutputOperandDimensions passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->getOutputOperandDimensions(index, dimensions);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_getOutputOperandDimensions unimplemented in Neural "
+                  "Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksExecution_setInput(ANeuralNetworksExecution* execution, int32_t index,
                                       const ANeuralNetworksOperandType* type, const void* buffer,
                                       size_t length) {
     NNTRACE_RT(NNTRACE_PHASE_INPUTS_AND_OUTPUTS, "ANeuralNetworksExecution_setInput");
+    // We do not support dynamic shapes
+    if (type != nullptr) {
+        LOG(ERROR) << "ANeuralNetworksExecution_setInput expected a nullptr for "
+                      "ANeuralNetworksOperandType* argument";
+        return ANEURALNETWORKS_BAD_DATA;
+    }
     if (!execution || (!buffer && length != 0)) {
         LOG(ERROR) << "ANeuralNetworksExecution_setInput passed a nullptr";
         return ANEURALNETWORKS_UNEXPECTED_NULL;
     }
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->setInput(index, type, buffer, length);
-}
-
-int ANeuralNetworksExecution_setInputFromMemory(ANeuralNetworksExecution* execution, int32_t index,
-                                                const ANeuralNetworksOperandType* type,
-                                                const ANeuralNetworksMemory* memory, size_t offset,
-                                                size_t length) {
-    NNTRACE_RT(NNTRACE_PHASE_INPUTS_AND_OUTPUTS, "ANeuralNetworksExecution_setInputFromMemory");
-    if (!execution || !memory) {
-        LOG(ERROR) << "ANeuralNetworksExecution_setInputFromMemory passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
+    auto context = reinterpret_cast<ExecutionContext*>(execution);
+    if (index < 0 || index >= static_cast<int32_t>(context->interpreter->inputs().size())) {
+        LOG(ERROR) << "ANeuralNetworksExecution_setInput index out of bounds";
+        return ANEURALNETWORKS_BAD_DATA;
     }
 
-    const RuntimeMemory* m = reinterpret_cast<const RuntimeMemory*>(memory);
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->setInputFromMemory(index, type, m, offset, length);
+    if (context->interpreter->input_tensor(index)->bytes != length) {
+        LOG(ERROR)
+                << "ANeuralNetworksExecution_setInput input bytes is different from buffer length";
+        return ANEURALNETWORKS_BAD_DATA;
+    }
+    context->inputs[index] = buffer;
+    context->inputSizes[index] = length;
+    return ANEURALNETWORKS_NO_ERROR;
+}
+
+int ANeuralNetworksExecution_setInputFromMemory(ANeuralNetworksExecution* /* execution */,
+                                                int32_t /* index */,
+                                                const ANeuralNetworksOperandType* /* type */,
+                                                const ANeuralNetworksMemory* /* memory */,
+                                                size_t /* offset */, size_t /* length */) {
+    NNTRACE_RT(NNTRACE_PHASE_INPUTS_AND_OUTPUTS, "ANeuralNetworksExecution_setInputFromMemory");
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_setInputFromMemory unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksExecution_setOutput(ANeuralNetworksExecution* execution, int32_t index,
                                        const ANeuralNetworksOperandType* type, void* buffer,
                                        size_t length) {
     NNTRACE_RT(NNTRACE_PHASE_INPUTS_AND_OUTPUTS, "ANeuralNetworksExecution_setOutput");
+    // We do not support dynamic shapes
+    if (type != nullptr) {
+        LOG(ERROR) << "ANeuralNetworksExecution_setOutput expected a nullptr for "
+                      "ANeuralNetworksOperandType* argument";
+        return ANEURALNETWORKS_BAD_DATA;
+    }
+
     if (!execution || (!buffer && length != 0)) {
-        LOG(ERROR) << "ANeuralNetworksExecution_setOutput passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->setOutput(index, type, buffer, length);
-}
-
-int ANeuralNetworksExecution_setOutputFromMemory(ANeuralNetworksExecution* execution, int32_t index,
-                                                 const ANeuralNetworksOperandType* type,
-                                                 const ANeuralNetworksMemory* memory, size_t offset,
-                                                 size_t length) {
-    NNTRACE_RT(NNTRACE_PHASE_INPUTS_AND_OUTPUTS, "ANeuralNetworksExecution_setOutputFromMemory");
-    if (!execution || !memory) {
-        LOG(ERROR) << "ANeuralNetworksExecution_setOutputFromMemory passed a nullptr";
+        LOG(ERROR) << "ANeuralNetworksExecution_setOutput passed a nullptr ";
         return ANEURALNETWORKS_UNEXPECTED_NULL;
     }
 
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    const RuntimeMemory* m = reinterpret_cast<const RuntimeMemory*>(memory);
-    return r->setOutputFromMemory(index, type, m, offset, length);
-}
-
-int ANeuralNetworksExecution_startCompute(ANeuralNetworksExecution* execution,
-                                          ANeuralNetworksEvent** event) {
-    NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_startCompute");
-    if (!event) {
-        LOG(ERROR) << "ANeuralNetworksExecution_startCompute passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
+    auto context = reinterpret_cast<ExecutionContext*>(execution);
+    if (index < 0 || index >= static_cast<int32_t>(context->interpreter->outputs().size())) {
+        LOG(ERROR) << "ANeuralNetworksExecution_setOutput index out of bounds";
+        return ANEURALNETWORKS_BAD_DATA;
     }
-    if (!execution) {
-        LOG(ERROR) << "ANeuralNetworksExecution_startCompute passed a nullptr";
-        *event = nullptr;
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
+
+    const size_t bufferSize = std::max<size_t>(length, 1);
+    if (bufferSize != context->interpreter->output_tensor(index)->bytes) {
+        LOG(ERROR) << "ANeuralNetworksExecution_setOutput length is not equal to the output tensor "
+                      "size";
+        return ANEURALNETWORKS_BAD_DATA;
     }
-    // TODO validate the rest
 
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-
-    std::shared_ptr<ExecutionCallback> callback;
-    *event = nullptr;
-
-    int n = r->computeAsynchronously(&callback);
-    if (n != ANEURALNETWORKS_NO_ERROR) {
-        return n;
+    const intptr_t dataPtrValue = reinterpret_cast<intptr_t>(buffer);
+    if (dataPtrValue % tflite::kDefaultTensorAlignment != 0) {
+        context->outputs[index] = buffer;
+        context->outputSizes[index] = bufferSize;
+    } else {
+        TfLiteCustomAllocation allocation = {.data = buffer, .bytes = bufferSize};
+        context->interpreter->SetCustomAllocationForTensor(context->interpreter->outputs()[index],
+                                                           allocation,
+                                                           kTfLiteCustomAllocationFlagsNone);
     }
-    auto e = std::make_unique<CallbackEvent>(std::move(callback));
-    *event = reinterpret_cast<ANeuralNetworksEvent*>(e.release());
+
+    context->isOutputSpecifiedAtIndex[index] = true;
     return ANEURALNETWORKS_NO_ERROR;
 }
 
-int ANeuralNetworksExecution_setTimeout(ANeuralNetworksExecution* execution, uint64_t duration) {
-    NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_setTimeout");
-    if (!execution) {
-        LOG(ERROR) << "ANeuralNetworksExecution_setTimeout passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
+int ANeuralNetworksExecution_setOutputFromMemory(ANeuralNetworksExecution* /* execution */,
+                                                 int32_t /* index */,
+                                                 const ANeuralNetworksOperandType* /* type */,
+                                                 const ANeuralNetworksMemory* /* memory */,
+                                                 size_t /* offset */, size_t /* length */) {
+    NNTRACE_RT(NNTRACE_PHASE_INPUTS_AND_OUTPUTS, "ANeuralNetworksExecution_setOutputFromMemory");
+    // Not supported yet in NNAPI v2
+    LOG(ERROR)
+            << "ANeuralNetworksExecution_setOutputFromMemory unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
+}
 
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->setTimeoutDuration(duration);
+int ANeuralNetworksExecution_startCompute(ANeuralNetworksExecution* /* execution */,
+                                          ANeuralNetworksEvent** /* event */) {
+    NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_startCompute");
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_startCompute unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
+}
+
+int ANeuralNetworksExecution_setTimeout(ANeuralNetworksExecution* /* execution */,
+                                        uint64_t /* duration */) {
+    NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_setTimeout");
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_setTimeout unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksEvent_wait(ANeuralNetworksEvent* event) {
@@ -1451,16 +1466,12 @@ void ANeuralNetworksEvent_free(ANeuralNetworksEvent* event) {
     }
 }
 
-int ANeuralNetworksExecution_setLoopTimeout(ANeuralNetworksExecution* execution,
-                                            uint64_t duration) {
+int ANeuralNetworksExecution_setLoopTimeout(ANeuralNetworksExecution* /* execution */,
+                                            uint64_t /* duration */) {
     NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_setLoopTimeout");
-    if (!execution) {
-        LOG(ERROR) << "ANeuralNetworksExecution_setLoopTimeout passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->setLoopTimeout(duration);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_setLoopTimeout unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 uint64_t ANeuralNetworks_getDefaultLoopTimeout() {
@@ -1526,30 +1537,26 @@ int ANeuralNetworksModel_setOperandExtensionData(ANeuralNetworksModel* model, in
     return m->setOperandExtensionData(index, data, length);
 }
 
-int ANeuralNetworksCompilation_addExtensionAttribute(ANeuralNetworksCompilation* compilation,
-                                                     const char* extensionName,
-                                                     uint16_t attributeCodeWithinExtension,
-                                                     const void* data, size_t length) {
+int ANeuralNetworksCompilation_addExtensionAttribute(ANeuralNetworksCompilation* /* compilation */,
+                                                     const char* /* extensionName */,
+                                                     uint16_t /* attributeCodeWithinExtension */,
+                                                     const void* /* data */, size_t /* length */) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION, "ANeuralNetworksCompilation_addExtensionAttribute");
-    if (!compilation || !extensionName || (!data && length != 0)) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_addExtensionAttribute passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    CompilationBuilder* c = reinterpret_cast<CompilationBuilder*>(compilation);
-    return c->addExtensionAttribute(extensionName, attributeCodeWithinExtension, data, length);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksCompilation_addExtensionAttribute unimplemented in Neural "
+                  "Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
-int ANeuralNetworksExecution_addExtensionAttribute(ANeuralNetworksExecution* execution,
-                                                   const char* extensionName,
-                                                   uint16_t attributeCodeWithinExtension,
-                                                   const void* data, size_t length) {
+int ANeuralNetworksExecution_addExtensionAttribute(ANeuralNetworksExecution* /* execution */,
+                                                   const char* /* extensionName */,
+                                                   uint16_t /* attributeCodeWithinExtension */,
+                                                   const void* /* data */, size_t /* length */) {
     NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_addExtensionAttribute");
-    if (!execution || !extensionName || (!data && length != 0)) {
-        LOG(ERROR) << "ANeuralNetworksExecution_addExtensionAttribute passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->addExtensionAttribute(extensionName, attributeCodeWithinExtension, data, length);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR)
+            << "ANeuralNetworksExecution_addExtensionAttribute unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksEvent_createFromSyncFenceFd(int syncFenceFd, ANeuralNetworksEvent** event) {
@@ -1591,146 +1598,78 @@ int ANeuralNetworksEvent_getSyncFenceFd(const ANeuralNetworksEvent* event, int* 
 }
 
 int ANeuralNetworksExecution_startComputeWithDependencies(
-        ANeuralNetworksExecution* execution, const ANeuralNetworksEvent* const* dependencies,
-        uint32_t numOfDependencies, uint64_t duration, ANeuralNetworksEvent** event) {
+        ANeuralNetworksExecution* /* execution */,
+        const ANeuralNetworksEvent* const* /* dependencies */, uint32_t /* numOfDependencies */,
+        uint64_t /* duration */, ANeuralNetworksEvent** /* event */) {
     NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_startComputeWithDependencies");
-    if (!event) {
-        LOG(ERROR) << "ANeuralNetworksExecution_startComputeWithDependencies passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    if ((!dependencies && numOfDependencies != 0) || !execution) {
-        LOG(ERROR) << "ANeuralNetworksExecution_startComputeWithDependencies passed a nullptr";
-        *event = nullptr;
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-
-    std::vector<int> waitForList;
-    for (uint32_t i = 0; i < numOfDependencies; i++) {
-        if (!dependencies[i]) {
-            LOG(ERROR) << "ANeuralNetworksExecution_startComputeWithDependencies passed a nullptr";
-            *event = nullptr;
-            return ANEURALNETWORKS_UNEXPECTED_NULL;
-        }
-        const IEvent* e = reinterpret_cast<const IEvent*>(dependencies[i]);
-        int syncFenceFd = e->getSyncFenceFd(/*should_dup*/ false);
-        if (syncFenceFd < 0) {
-            e->wait();
-        } else {
-            waitForList.push_back(syncFenceFd);
-        }
-    }
-
-    if (r->getCompilation()->hasDynamicTemporaries()) {
-        // The current implementation of fenced execution does not support
-        // dynamic temporaries.  Fall back to non fenced execution.
-        LOG(INFO) << "ANeuralNetworksExecution_startComputeWithDependencies falling back"
-                  << " to ANeuralNetworksExecution_startCompute"
-                  << " because of boundary operands of unknown size";
-        for (int syncFenceFd : waitForList) {
-            if (syncFenceFd > 0) {
-                auto w = syncWait(syncFenceFd, -1);
-                if (w != FenceState::SIGNALED) {
-                    VLOG(EXECUTION) << "syncWait failed, fd: " << syncFenceFd;
-                    *event = nullptr;
-                    return ANEURALNETWORKS_OP_FAILED;
-                }
-            }
-        }
-        return ANeuralNetworksExecution_startCompute(execution, event);
-    }
-
-    int syncFenceToSignal = -1;
-    int n = r->computeFenced(waitForList, duration, &syncFenceToSignal);
-    std::unique_ptr<SyncFenceEvent> e = std::make_unique<SyncFenceEvent>(
-            syncFenceToSignal, r->getExecuteFencedInfoCallback(),
-            // TODO(miaowang): support dynamic output shape only with memory domain.
-            // For now just return empty output shapes.
-            [r](ErrorStatus status) {
-                return r->finishComputation(status, {}, ExecutionMode::ASYNC_WITH_DEPS);
-            });
-    close(syncFenceToSignal);
-    if (n != ANEURALNETWORKS_NO_ERROR) {
-        *event = nullptr;
-    } else {
-        *event = reinterpret_cast<ANeuralNetworksEvent*>(e.release());
-    }
-    return n;
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_startComputeWithDependencies unimplemented in Neural "
+                  "Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int64_t ANeuralNetworks_getRuntimeFeatureLevel() {
     return getRuntimeFeatureLevelImpl();
 }
 
-int ANeuralNetworksExecution_enableInputAndOutputPadding(ANeuralNetworksExecution* execution,
-                                                         bool enable) {
+int ANeuralNetworksExecution_enableInputAndOutputPadding(ANeuralNetworksExecution* /* execution */,
+                                                         bool /* enable */) {
     NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_enableInputAndOutputPadding");
-    if (!execution) {
-        LOG(ERROR) << "ANeuralNetworksExecution_enableInputAndOutputPadding passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->enableInputAndOutputPadding(enable);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_enableInputAndOutputPadding unimplemented in Neural "
+                  "Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksCompilation_getPreferredMemoryAlignmentForInput(
-        const ANeuralNetworksCompilation* compilation, uint32_t index, uint32_t* alignment) {
+        const ANeuralNetworksCompilation* /* compilation */, uint32_t /* index */,
+        uint32_t* /* alignment */) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION,
                "ANeuralNetworksCompilation_getPreferredMemoryAlignmentForInput");
-    if (!compilation || !alignment) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_getPreferredMemoryAlignmentForInput passed a "
-                      "nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    const CompilationBuilder* c = reinterpret_cast<const CompilationBuilder*>(compilation);
-    return c->getPreferredMemoryAlignmentForInput(index, alignment);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksCompilation_getPreferredMemoryAlignmentForInput unimplemented in "
+                  "Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksCompilation_getPreferredMemoryPaddingForInput(
-        const ANeuralNetworksCompilation* compilation, uint32_t index, uint32_t* padding) {
+        const ANeuralNetworksCompilation* /* compilation */, uint32_t /* index */,
+        uint32_t* /* padding */) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION,
                "ANeuralNetworksCompilation_getPreferredMemoryPaddingForInput");
-    if (!compilation || !padding) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_getPreferredMemoryPaddingForInput passed a "
-                      "nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    const CompilationBuilder* c = reinterpret_cast<const CompilationBuilder*>(compilation);
-    return c->getPreferredMemoryPaddingForInput(index, padding);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksCompilation_getPreferredMemoryPaddingForInput unimplemented in "
+                  "Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksCompilation_getPreferredMemoryAlignmentForOutput(
-        const ANeuralNetworksCompilation* compilation, uint32_t index, uint32_t* alignment) {
+        const ANeuralNetworksCompilation* /* compilation */, uint32_t /* index */,
+        uint32_t* /* alignment */) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION,
                "ANeuralNetworksCompilation_getPreferredMemoryAlignmentForOutput");
-    if (!compilation || !alignment) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_getPreferredMemoryAlignmentForOutput passed a "
-                      "nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    const CompilationBuilder* c = reinterpret_cast<const CompilationBuilder*>(compilation);
-    return c->getPreferredMemoryAlignmentForOutput(index, alignment);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR)
+            << "ANeuralNetworksCompilation_getPreferredMemoryAlignmentForOutput unimplemented in "
+               "Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
 int ANeuralNetworksCompilation_getPreferredMemoryPaddingForOutput(
-        const ANeuralNetworksCompilation* compilation, uint32_t index, uint32_t* padding) {
+        const ANeuralNetworksCompilation* /* compilation */, uint32_t /* index */,
+        uint32_t* /* padding */) {
     NNTRACE_RT(NNTRACE_PHASE_COMPILATION,
                "ANeuralNetworksCompilation_getPreferredMemoryPaddingForOutput");
-    if (!compilation || !padding) {
-        LOG(ERROR) << "ANeuralNetworksCompilation_getPreferredMemoryPaddingForOutput passed a "
-                      "nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    const CompilationBuilder* c = reinterpret_cast<const CompilationBuilder*>(compilation);
-    return c->getPreferredMemoryPaddingForOutput(index, padding);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksCompilation_getPreferredMemoryPaddingForOutput unimplemented in "
+                  "Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
 
-int ANeuralNetworksExecution_setReusable(ANeuralNetworksExecution* execution, bool reusable) {
+int ANeuralNetworksExecution_setReusable(ANeuralNetworksExecution* /* execution */,
+                                         bool /* reusable */) {
     NNTRACE_RT(NNTRACE_PHASE_EXECUTION, "ANeuralNetworksExecution_setReusable");
-    if (!execution) {
-        LOG(ERROR) << "ANeuralNetworksExecution_setReusable passed a nullptr";
-        return ANEURALNETWORKS_UNEXPECTED_NULL;
-    }
-    ExecutionBuilder* r = reinterpret_cast<ExecutionBuilder*>(execution);
-    return r->setReusable(reusable);
+    // Not supported yet in NNAPI v2
+    LOG(ERROR) << "ANeuralNetworksExecution_setReusable unimplemented in Neural Networks V2";
+    return ANEURALNETWORKS_OP_FAILED;
 }
