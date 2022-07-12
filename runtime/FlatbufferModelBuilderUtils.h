@@ -71,6 +71,8 @@ inline tflite::BuiltinOperator getFlatbufferOperator(const OperationType& type) 
             return tflite::BuiltinOperator::BuiltinOperator_PAD;
         case OperationType::CONV_2D:
             return tflite::BuiltinOperator::BuiltinOperator_CONV_2D;
+        case OperationType::ADD:
+            return tflite::BuiltinOperator::BuiltinOperator_ADD;
         default:
             LOG(FATAL) << "OperationType not supported: " << type;
             return {};
@@ -83,11 +85,28 @@ inline int32_t getMaxOperatorVersionCode(tflite::BuiltinOperator builtinCode) {
     switch (builtinCode) {
         case tflite::BuiltinOperator::BuiltinOperator_CONV_2D:
             return 5;
+        case tflite::BuiltinOperator::BuiltinOperator_ADD:
+            return 4;
         case tflite::BuiltinOperator::BuiltinOperator_PAD:
             return 4;
         default:
             LOG(FATAL) << "BuiltinOperator not supported: " << builtinCode;
             return {};
+    }
+}
+
+inline Result<tflite::ActivationFunctionType> getTfliteActivation(FusedActivationFunc activation) {
+    switch (activation) {
+        case FusedActivationFunc::NONE:
+            return tflite::ActivationFunctionType::ActivationFunctionType_NONE;
+        case FusedActivationFunc::RELU:
+            return tflite::ActivationFunctionType::ActivationFunctionType_RELU;
+        case FusedActivationFunc::RELU1:
+            return tflite::ActivationFunctionType::ActivationFunctionType_RELU_N1_TO_1;
+        case FusedActivationFunc::RELU6:
+            return tflite::ActivationFunctionType::ActivationFunctionType_RELU6;
+        default:
+            NN_RET_CHECK_FAIL() << "FusedActivationFunc not supported: " << activation;
     }
 }
 

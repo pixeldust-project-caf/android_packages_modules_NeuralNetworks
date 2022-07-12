@@ -136,8 +136,8 @@ void CompatibilityLayerGeneratedTests::TearDown() {
 namespace {
 
 bool compatibleTest(const TestModel& testModel) {
-    static const std::vector<TestOperationType> kSupportedOperationTypes{
-            TestOperationType::CONV_2D};
+    static const std::vector<TestOperationType> kSupportedOperationTypes{TestOperationType::CONV_2D,
+                                                                         TestOperationType::ADD};
     static const std::vector<TestOperandType> kSupportedOperandTypes{
             TestOperandType::TENSOR_FLOAT32, TestOperandType::TENSOR_INT32,
             TestOperandType::TENSOR_QUANT8_ASYMM_SIGNED, TestOperandType::BOOL,

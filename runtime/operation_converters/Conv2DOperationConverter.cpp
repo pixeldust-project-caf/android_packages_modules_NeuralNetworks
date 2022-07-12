@@ -192,7 +192,8 @@ Result<void> Conv2DOperationConverter::convert(const Operation& operation,
     // get strides and activation
     int32_t strideW = context->getConstantScalar<int32_t>(strideWOperand);
     int32_t strideH = context->getConstantScalar<int32_t>(strideHOperand);
-    int32_t activation = context->getConstantScalar<int32_t>(activationOperand);
+    FusedActivationFunc activation = static_cast<FusedActivationFunc>(
+            context->getConstantScalar<int32_t>(activationOperand));
 
     // check for nchw
     int isNchwIdx = baseOptionsIdx + kIsNchwOffset;
@@ -225,8 +226,8 @@ Result<void> Conv2DOperationConverter::convert(const Operation& operation,
 
     flatbuffers::Offset<tflite::Conv2DOptions> optionsFlatbuffer = tflite::CreateConv2DOptions(
             context->getBuilder(), padding, strideW, strideH,
-            static_cast<tflite::ActivationFunctionType>(activation) /* fused_activation_function */,
-            dilationW, dilationH);
+            NN_TRY(getTfliteActivation(activation)) /* fused_activation_function */, dilationW,
+            dilationH);
     auto operatorFlatbuffer = tflite::CreateOperatorDirect(
             context->getBuilder() /* builder */, opCodeIdx /* opcode_index */, &inputs /* inputs */,
             &outputs /* outputs */,
