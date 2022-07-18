@@ -25,6 +25,7 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -123,8 +124,9 @@ void CompatibilityLayerGeneratedTests::TearDown() {
 namespace {
 
 bool compatibleTest(const TestModel& testModel) {
-    static const std::vector<TestOperationType> kSupportedOperationTypes{TestOperationType::CONV_2D,
-                                                                         TestOperationType::ADD};
+    static const std::vector<TestOperationType> kSupportedOperationTypes{
+            TestOperationType::CONV_2D, TestOperationType::ADD,
+            TestOperationType::DEPTHWISE_CONV_2D};
     static const std::vector<TestOperandType> kSupportedOperandTypes{
             TestOperandType::TENSOR_FLOAT32, TestOperandType::TENSOR_INT32,
             TestOperandType::TENSOR_QUANT8_ASYMM_SIGNED, TestOperandType::BOOL,
@@ -142,12 +144,16 @@ bool compatibleTest(const TestModel& testModel) {
             [&mainSubgraph](const TestOperation& operation) {
                 bool isOperationCompatible = true;
                 // ensure that tensors are nhwc and filter is constant
-                if (operation.type == TestOperationType::CONV_2D) {
-                    int isNchwIdx = 10;
-                    if (operation.inputs.size() < 8 ||
-                        mainSubgraph.operands[operation.inputs[7]].type == TestOperandType::BOOL) {
-                        isNchwIdx = 7;
-                    }
+                if (operation.type == TestOperationType::CONV_2D ||
+                    operation.type == TestOperationType::DEPTHWISE_CONV_2D) {
+                    size_t implicitIsNchwIdx =
+                            (operation.type == TestOperationType::CONV_2D) ? 7 : 8;
+                    size_t explicitIsNchwIdx = implicitIsNchwIdx + 3;
+                    bool isImplicitPadding =
+                            operation.inputs.size() <= implicitIsNchwIdx ||
+                            mainSubgraph.operands[operation.inputs[implicitIsNchwIdx]].type ==
+                                    TestOperandType::BOOL;
+                    size_t isNchwIdx = isImplicitPadding ? implicitIsNchwIdx : explicitIsNchwIdx;
 
                     if (operation.inputs.size() > static_cast<uint32_t>(isNchwIdx)) {
                         isOperationCompatible &=
@@ -156,11 +162,30 @@ bool compatibleTest(const TestModel& testModel) {
                     }
 
                     const int kFilterIdx = 1;
-                    TestOperandLifeTime filterLifetime =
-                            mainSubgraph.operands[operation.inputs[kFilterIdx]].lifetime;
+                    const TestOperand& filterOperand =
+                            mainSubgraph.operands[operation.inputs[kFilterIdx]];
+                    TestOperandLifeTime filterLifetime = filterOperand.lifetime;
                     isOperationCompatible &=
                             (filterLifetime == TestOperandLifeTime::CONSTANT_COPY) ||
                             (filterLifetime == TestOperandLifeTime::CONSTANT_REFERENCE);
+
+                    // check that making filter operands symmetrical does not over/underflow
+                    // this is because the outputs of the model will be different from expected if
+                    // the operand value changes with the under/overflow
+                    if (filterOperand.type == TestOperandType::TENSOR_QUANT8_ASYMM_SIGNED) {
+                        const int8_t* data = filterOperand.data.get<int8_t>();
+                        size_t dataSize = filterOperand.data.size();
+
+                        for (int32_t i = 0; i < static_cast<int32_t>(dataSize); i++) {
+                            int32_t newValue =
+                                    static_cast<int32_t>(data[i]) - filterOperand.zeroPoint;
+                            if (newValue < std::numeric_limits<int8_t>::min() ||
+                                newValue > std::numeric_limits<int8_t>::max()) {
+                                isOperationCompatible = false;
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 isOperationCompatible &=

@@ -842,8 +842,7 @@ int ANeuralNetworksExecution_compute(ANeuralNetworksExecution* execution) {
         return ANEURALNETWORKS_OP_FAILED;
     }
 
-    for (uint32_t index = 0; index < context->interpreter->inputs().size();
-         index++) {
+    for (uint32_t index = 0; index < context->interpreter->inputs().size(); index++) {
         const void* buffer = context->inputs[index];
         if (buffer == nullptr) {
             LOG(ERROR) << "ANeuralNetworksExecution_compute not all input buffers are specified";
