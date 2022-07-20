@@ -75,6 +75,8 @@ inline tflite::BuiltinOperator getFlatbufferOperator(const OperationType& type) 
             return tflite::BuiltinOperator::BuiltinOperator_ADD;
         case OperationType::DEPTHWISE_CONV_2D:
             return tflite::BuiltinOperator::BuiltinOperator_DEPTHWISE_CONV_2D;
+        case OperationType::LOGISTIC:
+            return tflite::BuiltinOperator::BuiltinOperator_LOGISTIC;
         default:
             LOG(FATAL) << "OperationType not supported: " << type;
             return {};
@@ -93,6 +95,8 @@ inline int32_t getMaxOperatorVersionCode(tflite::BuiltinOperator builtinCode) {
             return 4;
         case tflite::BuiltinOperator::BuiltinOperator_PAD:
             return 4;
+        case tflite::BuiltinOperator::BuiltinOperator_LOGISTIC:
+            return 3;
         default:
             LOG(FATAL) << "BuiltinOperator not supported: " << builtinCode;
             return {};
