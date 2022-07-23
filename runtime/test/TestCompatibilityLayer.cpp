@@ -25,6 +25,7 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -34,9 +35,7 @@
 #include <vector>
 
 #include "AndroidVersionUtil.h"
-#include "FlatbufferModelBuilder.h"
 #include "GeneratedTestUtils.h"
-#include "ModelBuilder.h"
 #include "NeuralNetworks.h"
 #include "NeuralNetworksTypes.h"
 #include "TestHarness.h"
@@ -80,47 +79,36 @@ void CompatibilityLayerGeneratedTests::execute(const TestModel& testModel) {
     if (testModel.expectFailure && !model.isValid()) {
         return;
     }
-    ASSERT_EQ(model.finish(), test_wrapper::Result::NO_ERROR);
+    ASSERT_EQ(model.finish(), Result::NO_ERROR);
     ASSERT_TRUE(model.isValid());
 
-    auto flatbufferModelBuilder = reinterpret_cast<FlatbufferModelBuilder*>(model.getHandle());
-    // Load the model
-    auto tfliteModel = flatbufferModelBuilder->createTfliteModel();
-    if (!mTestSupported) {
-        ASSERT_FALSE(tfliteModel.ok());
-        return;
-    }
-    ASSERT_TRUE(tfliteModel.ok()) << tfliteModel.error();
+    Compilation compilation(&model);
+    Result result = compilation.finish();
+    if (!mTestSupported && result != Result::NO_ERROR) return;
+    ASSERT_EQ(result, Result::NO_ERROR);
 
-    std::unique_ptr<tflite::FlatBufferModel> flatBufferModel =
-            tflite::FlatBufferModel::BuildFromModel(tfliteModel.value());
-    ASSERT_NE(flatBufferModel, nullptr);
+    Execution execution(&compilation);
 
-    // Build the interpreter
-    tflite::ops::builtin::BuiltinOpResolver resolver;
-    std::unique_ptr<tflite::Interpreter> interpreter;
-    ASSERT_EQ(tflite::InterpreterBuilder(*flatBufferModel, resolver)(&interpreter), kTfLiteOk);
-    ASSERT_NE(interpreter, nullptr);
-
-    ASSERT_EQ(interpreter->AllocateTensors(), kTfLiteOk);
-
+    // Model inputs.
     for (uint32_t i = 0; i < testModel.main.inputIndexes.size(); i++) {
         const auto& operand = testModel.main.operands[testModel.main.inputIndexes[i]];
-
-        ASSERT_LE(interpreter->input_tensor(i)->bytes, operand.data.size());
-        std::memcpy(interpreter->input_tensor(i)->data.raw, operand.data.get<void>(),
-                    operand.data.size());
+        ASSERT_EQ(Result::NO_ERROR,
+                  execution.setInput(i, operand.data.get<void>(), operand.data.size()));
     }
 
-    ASSERT_EQ(interpreter->Invoke(), kTfLiteOk);
-
+    // Model outputs.
     std::vector<TestBuffer> outputs;
     for (uint32_t i = 0; i < testModel.main.outputIndexes.size(); i++) {
         const auto& operand = testModel.main.operands[testModel.main.outputIndexes[i]];
         const size_t bufferSize = std::max<size_t>(operand.data.size(), 1);
-        ASSERT_GE(interpreter->output_tensor(i)->bytes, bufferSize);
-        outputs.emplace_back(bufferSize, interpreter->output_tensor(i)->data.raw);
+        outputs.emplace_back(bufferSize);
+
+        ASSERT_EQ(Result::NO_ERROR,
+                  execution.setOutput(i, outputs.back().getMutable<void>(), bufferSize));
     }
+
+    result = execution.compute(Execution::ComputeMode::SYNC);
+    ASSERT_EQ(result, Result::NO_ERROR);
 
     checkResults(testModel, outputs);
 }
@@ -136,8 +124,9 @@ void CompatibilityLayerGeneratedTests::TearDown() {
 namespace {
 
 bool compatibleTest(const TestModel& testModel) {
-    static const std::vector<TestOperationType> kSupportedOperationTypes{TestOperationType::CONV_2D,
-                                                                         TestOperationType::ADD};
+    static const std::vector<TestOperationType> kSupportedOperationTypes{
+            TestOperationType::CONV_2D, TestOperationType::ADD,
+            TestOperationType::DEPTHWISE_CONV_2D, TestOperationType::LOGISTIC};
     static const std::vector<TestOperandType> kSupportedOperandTypes{
             TestOperandType::TENSOR_FLOAT32, TestOperandType::TENSOR_INT32,
             TestOperandType::TENSOR_QUANT8_ASYMM_SIGNED, TestOperandType::BOOL,
@@ -155,12 +144,16 @@ bool compatibleTest(const TestModel& testModel) {
             [&mainSubgraph](const TestOperation& operation) {
                 bool isOperationCompatible = true;
                 // ensure that tensors are nhwc and filter is constant
-                if (operation.type == TestOperationType::CONV_2D) {
-                    int isNchwIdx = 10;
-                    if (operation.inputs.size() < 8 ||
-                        mainSubgraph.operands[operation.inputs[7]].type == TestOperandType::BOOL) {
-                        isNchwIdx = 7;
-                    }
+                if (operation.type == TestOperationType::CONV_2D ||
+                    operation.type == TestOperationType::DEPTHWISE_CONV_2D) {
+                    size_t implicitIsNchwIdx =
+                            (operation.type == TestOperationType::CONV_2D) ? 7 : 8;
+                    size_t explicitIsNchwIdx = implicitIsNchwIdx + 3;
+                    bool isImplicitPadding =
+                            operation.inputs.size() <= implicitIsNchwIdx ||
+                            mainSubgraph.operands[operation.inputs[implicitIsNchwIdx]].type ==
+                                    TestOperandType::BOOL;
+                    size_t isNchwIdx = isImplicitPadding ? implicitIsNchwIdx : explicitIsNchwIdx;
 
                     if (operation.inputs.size() > static_cast<uint32_t>(isNchwIdx)) {
                         isOperationCompatible &=
@@ -169,11 +162,30 @@ bool compatibleTest(const TestModel& testModel) {
                     }
 
                     const int kFilterIdx = 1;
-                    TestOperandLifeTime filterLifetime =
-                            mainSubgraph.operands[operation.inputs[kFilterIdx]].lifetime;
+                    const TestOperand& filterOperand =
+                            mainSubgraph.operands[operation.inputs[kFilterIdx]];
+                    TestOperandLifeTime filterLifetime = filterOperand.lifetime;
                     isOperationCompatible &=
                             (filterLifetime == TestOperandLifeTime::CONSTANT_COPY) ||
                             (filterLifetime == TestOperandLifeTime::CONSTANT_REFERENCE);
+
+                    // check that making filter operands symmetrical does not over/underflow
+                    // this is because the outputs of the model will be different from expected if
+                    // the operand value changes with the under/overflow
+                    if (filterOperand.type == TestOperandType::TENSOR_QUANT8_ASYMM_SIGNED) {
+                        const int8_t* data = filterOperand.data.get<int8_t>();
+                        size_t dataSize = filterOperand.data.size();
+
+                        for (int32_t i = 0; i < static_cast<int32_t>(dataSize); i++) {
+                            int32_t newValue =
+                                    static_cast<int32_t>(data[i]) - filterOperand.zeroPoint;
+                            if (newValue < std::numeric_limits<int8_t>::min() ||
+                                newValue > std::numeric_limits<int8_t>::max()) {
+                                isOperationCompatible = false;
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 isOperationCompatible &=

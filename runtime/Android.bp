@@ -180,6 +180,8 @@ cc_defaults {
         "operation_converters/AddOperationConverter.cpp",
         "operation_converters/ArithmeticOperationConverter.cpp",
         "operation_converters/Conv2DOperationConverter.cpp",
+        "operation_converters/DepthwiseConv2DOperationConverter.cpp",
+        "operation_converters/LogisticOperationConverter.cpp",
         "operation_converters/OperationConverterResolver.cpp",
         "operation_converters/SubGraphContext.cpp",
     ],
