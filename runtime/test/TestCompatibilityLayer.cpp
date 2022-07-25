@@ -110,7 +110,17 @@ void CompatibilityLayerGeneratedTests::execute(const TestModel& testModel) {
     result = execution.compute(Execution::ComputeMode::SYNC);
     ASSERT_EQ(result, Result::NO_ERROR);
 
-    checkResults(testModel, outputs);
+    // If a conv filter under/overflows, "compatibleTest" will report
+    // unsupported, but the actual conversion will result in NO_ERROR because
+    // it is treated as a warning, rather than an error. Because of the accuracy
+    // loss, we should not check test results in such a case.
+    //
+    // TODO(b/237410741): A potentially better approach is to have
+    // "compatibleTest" report three status: fully supported, supported with
+    // accuracy loss, and not supported.
+    if (mTestSupported) {
+        checkResults(testModel, outputs);
+    }
 }
 
 void CompatibilityLayerGeneratedTests::SetUp() {
