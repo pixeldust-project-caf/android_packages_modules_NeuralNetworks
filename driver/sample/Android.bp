@@ -119,22 +119,17 @@ cc_fuzz {
     defaults: [
         "neuralnetworks_defaults",
         "neuralnetworks_use_latest_utils_hal_aidl",
+        "service_fuzzer_defaults",
     ],
     header_libs: [
         "libneuralnetworks_headers",
     ],
     shared_libs: [
-        "libbase",
-        "libbinder",
-        "libbinder_ndk",
-        "libcutils",
         "liblog",
         "libtextclassifier_hash",
-        "libutils",
     ],
     static_libs: [
         "libaidlcommonsupport",
-        "libbinder_random_parcel",
         "libneuralnetworks_common",
         "neuralnetworks_canonical_sample_driver",
         "neuralnetworks_utils_hal_adapter_aidl",
