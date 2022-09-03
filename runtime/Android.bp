@@ -171,6 +171,33 @@ cc_defaults {
     ],
 }
 
+cc_defaults {
+    name: "libneuralnetworks_v2_defaults",
+    defaults: ["libneuralnetworks_defaults"],
+    srcs: [
+        "FlatbufferModelBuilder.cpp",
+        "NeuralNetworksV2.cpp",
+        "operation_converters/AddOperationConverter.cpp",
+        "operation_converters/ArithmeticOperationConverter.cpp",
+        "operation_converters/Conv2DOperationConverter.cpp",
+        "operation_converters/OperationConverterResolver.cpp",
+        "operation_converters/SubGraphContext.cpp",
+    ],
+
+    exclude_srcs: [
+        "NeuralNetworks.cpp",
+    ],
+
+    static_libs: [
+        "libtflite_static",
+    ],
+
+    include_dirs: [
+        "external/flatbuffers/include",
+        "external/tensorflow",
+    ],
+}
+
 cc_library_shared {
     name: "libneuralnetworks",
     llndk: {
@@ -223,6 +250,24 @@ cc_library_static {
     ],
     cflags: ["-DNN_EXPERIMENTAL_FEATURE"],
     apex_available: ["//apex_available:platform"],
+}
+
+cc_library_static {
+    name: "libneuralnetworks_v2_static_experimental",
+    defaults: [
+        "libneuralnetworks_v2_defaults",
+        "neuralnetworks_defaults",
+    ],
+    exclude_static_libs: [
+        "libneuralnetworks_common",
+        "neuralnetworks_types",
+        "server_configurable_flags",
+    ],
+    static_libs: [
+        "libneuralnetworks_common_experimental",
+        "neuralnetworks_types_experimental",
+    ],
+    cflags: ["-DNN_EXPERIMENTAL_FEATURE"],
 }
 
 cc_library_static {
