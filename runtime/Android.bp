@@ -106,7 +106,6 @@ cc_defaults {
             version_script: "libneuralnetworks.map.txt",
             generated_sources: ["statslog_neuralnetworks.cpp"],
             generated_headers: ["statslog_neuralnetworks.h"],
-            export_generated_headers: ["statslog_neuralnetworks.h"],
             srcs: [
                 "TelemetryStatsd.cpp",
             ],
