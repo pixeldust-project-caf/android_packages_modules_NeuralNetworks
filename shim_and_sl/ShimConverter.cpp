@@ -51,6 +51,10 @@ ANeuralNetworksModel* convertSubgraphFromHAL(
         size_t subgraphIndex, const std::vector<uint8_t>& copiedOperandValues,
         ErrorStatus* errorStatus) {
     *errorStatus = ErrorStatus::NONE;
+    if (allModels == nullptr || subgraphIndex >= (*allModels).size()) {
+        *errorStatus = ErrorStatus::INVALID_ARGUMENT;
+        return nullptr;
+    }
     if ((*allModels)[subgraphIndex].has_value()) {
         return (*allModels)[subgraphIndex]->getHandle();
     }
