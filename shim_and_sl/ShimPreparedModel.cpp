@@ -74,6 +74,11 @@ ErrorStatus ShimPreparedModel::parseInputs(
     }
 
     const auto& model = mMainAndReferencedModels[0];
+
+    if (request.inputs.size() > model.getInputs().size()) {
+        return ErrorStatus::INVALID_ARGUMENT;
+    }
+
     // set inputs
     for (int i = 0; i < request.inputs.size(); ++i) {
         const auto& input = request.inputs[i];
@@ -96,6 +101,9 @@ ErrorStatus ShimPreparedModel::parseInputs(
         }
     }
 
+    if (request.outputs.size() > model.getOutputs().size()) {
+        return ErrorStatus::INVALID_ARGUMENT;
+    }
     // set outputs
     for (int i = 0; i < request.outputs.size(); ++i) {
         const auto& output = request.outputs[i];
