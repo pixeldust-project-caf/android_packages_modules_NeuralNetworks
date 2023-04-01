@@ -417,6 +417,9 @@ cc_test {
         "philox_random_headers",
         "tensorflow_headers",
     ],
+    test_suites: [
+        "general-tests",
+    ],
 }
 
 cc_test {
