@@ -363,7 +363,6 @@ cc_library_static {
 cc_defaults {
     name: "NeuralNetworksTest_common",
     defaults: [
-        "neuralnetworks_float16",
         "neuralnetworks_use_latest_utils_hal_aidl",
     ],
     host_supported: true,
