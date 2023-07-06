@@ -154,6 +154,10 @@ ANeuralNetworksModel* convertSubgraphFromHAL(
                 break;
             }
             case OperandLifeTime::CONSTANT_POOL: {
+                if (operand.location.poolIndex >= memoryPools.size()) {
+                    *errorStatus = ErrorStatus::INVALID_ARGUMENT;
+                    return nullptr;
+                }
                 resultModel.setOperandValueFromMemory(
                         i, memoryPools[operand.location.poolIndex].get(), operand.location.offset,
                         operand.location.length);
