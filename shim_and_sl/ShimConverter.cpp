@@ -128,6 +128,12 @@ ANeuralNetworksModel* convertSubgraphFromHAL(
 
         switch (operand.lifetime) {
             case OperandLifeTime::CONSTANT_COPY: {
+                if (operand.location.length + operand.location.offset >
+                    model.operandValues.size()) {
+                    *errorStatus = ErrorStatus::INVALID_ARGUMENT;
+                    return nullptr;
+                }
+
                 if (operand.location.length <=
                     ANEURALNETWORKS_MAX_SIZE_OF_IMMEDIATELY_COPIED_VALUES) {
                     resultModel.setOperandValue(
@@ -144,6 +150,10 @@ ANeuralNetworksModel* convertSubgraphFromHAL(
                 break;
             }
             case OperandLifeTime::CONSTANT_POOL: {
+                if (operand.location.poolIndex >= memoryPools.size()) {
+                    *errorStatus = ErrorStatus::INVALID_ARGUMENT;
+                    return nullptr;
+                }
                 resultModel.setOperandValueFromMemory(
                         i, memoryPools[operand.location.poolIndex].get(), operand.location.offset,
                         operand.location.length);
